@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+:root {
+  --primary:      rgb(124, 58, 237);
+  --primary-a35:  rgba(124, 58, 237, 0.35);
+  --primary-a12:  rgba(124, 58, 237, 0.12);
+  --primary-dark: rgb(84, 18, 197);
+  --rainbow-base: hsl(0, 82%, 58%);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #f3f4f6;
+}
+
+#root { min-height: 100vh; }
+
+.bebas { font-family: 'Bebas Neue', cursive; }
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* ── Rainbow animation ── */
+@keyframes rainbow {
+  from { filter: hue-rotate(0deg); }
+  to   { filter: hue-rotate(360deg); }
+}
+
+/* Applies to any element that should cycle through all hues.
+   The element must have a saturated base color (var(--rainbow-base))
+   so the rotation is visible. White/gray elements are unaffected. */
+.is-rainbow {
+  background: var(--rainbow-base) !important;
+  animation: rainbow 4s linear infinite;
+}
+
+/* ── Bingo cell ── */
+.bingo-cell {
+  transition: background 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+}
+.bingo-cell:not(:disabled):not(.is-rainbow):hover { filter: brightness(0.9); }
+.bingo-cell:not(:disabled):active { transform: scale(0.86) !important; }
+.bingo-cell.marked { transform: scale(1.05); }
+
+/* ── Stage pill animation ── */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.3; }
+}
+.pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
+
+/* ── Toast slide-in ── */
+@keyframes slide-down {
+  from { transform: translate(-50%, -120%); opacity: 0; }
+  to   { transform: translate(-50%, 0);     opacity: 1; }
+}
+.toast-enter {
+  animation: slide-down 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
