@@ -31,9 +31,9 @@ function playWinSound() {
 
 // ── Grid helpers ──────────────────────────────────────────────────────────────
 
-const COLS    = ['B', 'I', 'N', 'G', 'O']
-const isFree  = (r, c) => r === 2 && c === 2
-const mkGrid  = fill => Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => fill(r, c)))
+const COLS     = ['B', 'I', 'N', 'G', 'O']
+const isFree   = (r, c) => r === 2 && c === 2
+const mkGrid   = fill => Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => fill(r, c)))
 const mkMarked = () => mkGrid((r, c) => isFree(r, c))
 const mkEmpty  = () => Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => ''))
 
@@ -69,12 +69,9 @@ function stageCheck(s, marked, pat) {
 
 // ── Stage metadata ────────────────────────────────────────────────────────────
 //
-// The game ALWAYS has 3 progressive stages (no modes):
-//   Stage 1 → Línea  (first card to complete a row / col / diagonal)
-//   Stage 2 → Figura (first card to complete the custom figure)
-//   Stage 3 → Lleno  (first card to fill every cell) — ends the game
-//
-// All stages share the same called numbers.  A card can win multiple stages.
+//  Stage 1 → Línea       (any row / col / diagonal)   — game continues
+//  Stage 2 → Figura      (custom figure)              — game continues
+//  Stage 3 → Cartón Lleno (every cell filled)         — game ends
 
 const STAGES = {
   1: { badge: 'line',   label: 'LÍNEA',       emoji: '🥇', name: 'Línea' },
@@ -82,9 +79,7 @@ const STAGES = {
   3: { badge: 'full',   label: 'CARTÓN LLENO', emoji: '🏆', name: 'Cartón Lleno' },
 }
 
-// Evaluates stages in order starting from `startStage`.
-// Awards badges to winners, chains if a stage is immediately resolved.
-// Returns the updated card array, a list of resolutions, and the next stage to evaluate.
+// Evaluates stages in order starting from startStage, chaining if possible.
 function evaluateStages(cards, startStage, pat) {
   let cur = cards
   let s   = startStage
@@ -116,7 +111,6 @@ function hexToRgbParts(hex) {
   const v = hex.replace('#', '')
   return [parseInt(v.slice(0,2),16), parseInt(v.slice(2,4),16), parseInt(v.slice(4,6),16)]
 }
-
 function syncCssColor(hex) {
   const [R, G, B] = hexToRgbParts(hex)
   const d = document.documentElement.style
@@ -126,37 +120,41 @@ function syncCssColor(hex) {
   d.setProperty('--primary-dark', `rgb(${Math.max(0,R-40)},${Math.max(0,G-40)},${Math.max(0,B-40)})`)
 }
 
-// ── Small reusable components ─────────────────────────────────────────────────
+// ── Shared sub-components ─────────────────────────────────────────────────────
 
 function Section({ title, children }) {
   return (
-    <div className="bg-white rounded-2xl p-5 shadow-sm">
+    <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm">
       {title && (
-        <p className="font-bold text-gray-500 mb-4 text-xs uppercase tracking-wider">{title}</p>
+        <p className="font-bold text-gray-500 mb-3 text-xs uppercase tracking-wider">{title}</p>
       )}
       {children}
     </div>
   )
 }
 
-// 5×5 grid of number inputs (shared between config and mid-game modal)
+// 5×5 input grid — cells are touch-friendly and prevent iOS-zoom (font ≥ 16 px)
 function CardFormGrid({ form, onChange, onSubmit }) {
   return (
-    <div className="overflow-x-auto">
-      <div className="inline-block">
+    <div className="overflow-x-auto -mx-1 px-1">
+      <div className="inline-block min-w-full">
+        {/* Column headers */}
         <div className="grid grid-cols-5 gap-1 mb-1">
           {COLS.map(l => (
-            <div key={l} className="w-14 text-center text-sm font-black bebas tracking-wider"
+            <div key={l}
+              className="w-12 sm:w-14 text-center text-sm font-black bebas tracking-wider"
               style={{ color: 'var(--primary)' }}>
               {l}
             </div>
           ))}
         </div>
+        {/* Input cells */}
         <div className="grid grid-cols-5 gap-1">
           {mkGrid((r, c) =>
             isFree(r, c)
               ? <div key={`${r}${c}`}
-                  className="w-14 h-12 rounded-xl flex items-center justify-center text-white text-xs font-black bebas tracking-widest"
+                  className="w-12 sm:w-14 h-11 sm:h-12 rounded-xl flex items-center justify-center
+                    text-white font-black bebas tracking-widest text-xs sm:text-sm"
                   style={{ background: 'var(--primary)' }}>
                   FREE
                 </div>
@@ -164,10 +162,12 @@ function CardFormGrid({ form, onChange, onSubmit }) {
                   value={form[r][c]}
                   onChange={e => onChange(r, c, e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && onSubmit?.()}
-                  className="w-14 h-12 rounded-xl border-2 text-center text-sm font-bold
-                    focus:outline-none transition-colors"
+                  // text-base keeps font ≥ 16px, preventing iOS auto-zoom on focus
+                  className="w-12 sm:w-14 h-11 sm:h-12 rounded-xl border-2 text-center
+                    font-bold text-base focus:outline-none transition-colors"
                   style={{ borderColor: form[r][c] ? 'var(--primary)' : '#e5e7eb' }}
-                  placeholder="—" />
+                  placeholder="—"
+                  inputMode="numeric" />
           )}
         </div>
       </div>
@@ -175,13 +175,13 @@ function CardFormGrid({ form, onChange, onSubmit }) {
   )
 }
 
-// 30×30 px dot preview of a figure preset
+// 30×30 px dot preview for figure preset buttons
 function MiniPattern({ fn }) {
   return (
     <div className="grid grid-cols-5 gap-px" style={{ width: 30, height: 30 }}>
       {mkGrid((r, c) => (
         <div key={`${r}${c}`} className="rounded-sm" style={{
-          background: fn(r,c) || isFree(r,c) ? 'var(--primary)' : '#d1d5db',
+          background: fn(r,c)||isFree(r,c) ? 'var(--primary)' : '#d1d5db',
           opacity:    isFree(r,c) ? 0.55 : 1,
         }} />
       ))}
@@ -196,8 +196,7 @@ export default function App() {
   const [screen,  setScreen]  = useState('config')
   const [color,   setColor]   = useState('#7C3AED')
   const [rainbow, setRainbow] = useState(false)
-  // Stage-2 figure pattern (defaults to Cruz so it's non-trivial)
-  const [pat, setPat] = useState(() => mkFigure(FIGURE_PRESETS.Cruz))
+  const [pat,     setPat]     = useState(() => mkFigure(FIGURE_PRESETS.Cruz))
 
   // ─ Config card builder ─
   const [form,      setForm]      = useState(mkEmpty)
@@ -205,26 +204,22 @@ export default function App() {
   const [cardError, setCardError] = useState('')
 
   // ─ Game ─
-  // stage: 1 = Línea active, 2 = Figura active, 3 = Cartón Lleno active
-  // gameOver: true once stage 3 is resolved
-  // gameCards[].badges: array of 'line' | 'figure' | 'full'
   const [gameCards, setGameCards] = useState([])
   const [called,    setCalled]    = useState([])
   const [stage,     setStage]     = useState(1)
   const [gameOver,  setGameOver]  = useState(false)
   const [numInput,  setNumInput]  = useState('')
   const [gameError, setGameError] = useState('')
-  const [toast,     setToast]     = useState(null)  // { msg, stageNum } | null
+  const [toast,     setToast]     = useState(null)
 
   // ─ Mid-game add-card modal ─
   const [modalOpen,  setModalOpen]  = useState(false)
   const [modalForm,  setModalForm]  = useState(mkEmpty)
   const [modalError, setModalError] = useState('')
 
-  const inputRef = useRef(null)
-  const ballsRef = useRef(null)
-  // Tracks active toast timeouts so we can cancel if undo fires mid-animation
-  const toastTimerRef = useRef(null)
+  const inputRef    = useRef(null)
+  const ballsRef    = useRef(null)
+  const toastTimer  = useRef(null)
 
   useEffect(() => { syncCssColor(color) }, [color])
   useEffect(() => { loadConfetti() }, [])
@@ -235,7 +230,6 @@ export default function App() {
     if (isFree(r, c)) return
     setPat(p => p.map((row, ri) => row.map((v, ci) => ri===r&&ci===c ? !v : v)))
   }
-  const loadPreset = name => setPat(mkFigure(FIGURE_PRESETS[name]))
 
   const updateForm = (r, c, val) =>
     setForm(f => f.map((row, ri) => row.map((v, ci) => ri===r&&ci===c ? val : v)))
@@ -248,7 +242,7 @@ export default function App() {
       if (isNaN(n) || n < 1 || n > 75) return 'Todos los números deben ser entre 1 y 75'
       nums.push(n)
     }
-    if (new Set(nums).size < nums.length) return 'No puede haber números repetidos en el cartón'
+    if (new Set(nums).size < nums.length) return 'No puede haber números repetidos'
     return null
   }
 
@@ -277,12 +271,14 @@ export default function App() {
   const fireStageWin = useCallback((stageNum, winners) => {
     const { emoji, label } = STAGES[stageNum]
     const list = winners.map(w => w.idx).join(', #')
-    const msg  = `${emoji} ¡${label}! Cartón${winners.length > 1 ? 'es' : ''} #${list}`
-    setToast({ msg, stageNum })
+    setToast({
+      msg: `${emoji} ¡${label}!\nCartón${winners.length > 1 ? 'es' : ''} #${list}`,
+      stageNum,
+    })
     playWinSound()
     loadConfetti().then(f => f && f({ particleCount: 230, spread: 110, origin: { y: 0.55 } }))
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
-    toastTimerRef.current = setTimeout(() => setToast(null), 3200)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(null), 3200)
   }, [])
 
   // ── Game: call number ─────────────────────────────────────────────────────
@@ -290,15 +286,14 @@ export default function App() {
   const callNum = useCallback(() => {
     if (gameOver) return
     const n = parseInt(numInput)
-    if (isNaN(n) || n < 1 || n > 75) { setGameError('Ingresa un número entre 1 y 75'); return }
-    if (called.includes(n))           { setGameError('Ese número ya fue cantado'); return }
+    if (isNaN(n) || n < 1 || n > 75) { setGameError('Número entre 1 y 75'); return }
+    if (called.includes(n))           { setGameError('Ya fue cantado'); return }
     setGameError('')
 
     const newCalled = [...called, n]
     setCalled(newCalled)
     setNumInput('')
 
-    // Update marks for all cards
     const markedCards = gameCards.map(card => ({
       ...card,
       marked: card.marked.map((row, r) =>
@@ -306,16 +301,12 @@ export default function App() {
       ),
     }))
 
-    // Evaluate current (and potentially subsequent) stages
     const { cards: finalCards, resolutions, nextStage } = evaluateStages(markedCards, stage, pat)
     setGameCards(finalCards)
 
     if (resolutions.length > 0) {
-      // Advance stage immediately so the next call uses the correct stage
       setStage(Math.min(nextStage, 3))
       if (nextStage > 3) setGameOver(true)
-
-      // Show toasts with 3.5 s between each (in case multiple stages resolved at once)
       resolutions.forEach(({ stageNum, winners }, i) => {
         setTimeout(() => fireStageWin(stageNum, winners), i * 3500)
       })
@@ -323,7 +314,6 @@ export default function App() {
 
     setTimeout(() => {
       if (ballsRef.current) ballsRef.current.scrollLeft = ballsRef.current.scrollWidth
-      inputRef.current?.focus()
     }, 40)
   }, [numInput, called, gameCards, stage, pat, gameOver, fireStageWin])
 
@@ -334,9 +324,8 @@ export default function App() {
     const newCalled = called.slice(0, -1)
     setCalled(newCalled)
     setToast(null)
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current)
+    if (toastTimer.current) clearTimeout(toastTimer.current)
 
-    // Recalculate marks and badges from scratch
     const recalc = gameCards.map(card => ({
       ...card,
       badges: [],
@@ -344,7 +333,6 @@ export default function App() {
         row.map((v, c) => isFree(r,c) ? true : newCalled.includes(v))
       ),
     }))
-
     const { cards: finalCards, nextStage } = evaluateStages(recalc, 1, pat)
     setGameCards(finalCards)
     setStage(Math.min(nextStage, 3))
@@ -370,7 +358,6 @@ export default function App() {
     const err = validateCardForm(modalForm)
     if (err) { setModalError(err); return }
     setModalError('')
-
     const preMarked = mkGrid((r, c) =>
       isFree(r,c) ? true : called.includes(parseInt(modalForm[r][c]))
     )
@@ -403,24 +390,24 @@ export default function App() {
     <div className="min-h-screen bg-gray-50 pb-12">
 
       {/* Header */}
-      <header className={`text-white text-center py-10 mb-6 shadow-xl ${rainbow ? 'is-rainbow' : ''}`}
+      <header className={`text-white text-center py-8 sm:py-10 mb-5 shadow-xl ${rainbow ? 'is-rainbow' : ''}`}
         style={{ background: rainbow ? undefined : 'var(--primary)' }}>
-        <h1 className="bebas text-7xl text-white select-none drop-shadow-lg"
+        <h1 className="bebas text-6xl sm:text-7xl text-white select-none drop-shadow-lg"
           style={{ letterSpacing: '0.35em' }}>
           BINGO
         </h1>
-        <p className="text-xs opacity-60 tracking-[0.25em] uppercase mt-1 font-medium">
+        <p className="text-xs opacity-60 tracking-[0.2em] uppercase mt-1 font-medium">
           Configuración de partida
         </p>
       </header>
 
-      <div className="max-w-xl mx-auto px-4 space-y-5">
+      <div className="max-w-xl mx-auto px-3 sm:px-4 space-y-4">
 
-        {/* Color picker */}
+        {/* ── Color picker ── */}
         <Section title="Color primario">
           <div className="space-y-3">
-            {/* Native picker + rainbow toggle */}
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Native color picker trigger */}
               <div className="relative cursor-pointer flex-shrink-0">
                 <input type="color" value={color}
                   onChange={e => { setColor(e.target.value); setRainbow(false) }}
@@ -433,16 +420,15 @@ export default function App() {
                   {color.toUpperCase()}
                 </div>
               </div>
-
+              {/* Rainbow toggle */}
               <button onClick={() => setRainbow(r => !r)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm font-bold
                   transition-all hover:scale-105 active:scale-95 select-none flex-shrink-0
-                  ${rainbow ? 'is-rainbow text-white border-transparent' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                  ${rainbow ? 'is-rainbow text-white border-transparent' : 'border-gray-200 text-gray-500'}`}>
                 🌈 Arcoíris{rainbow ? ' ✓' : ''}
               </button>
             </div>
-
-            {/* Preset swatches */}
+            {/* Color swatches — wrap naturally */}
             <div className="flex flex-wrap gap-2">
               {COLOR_PRESETS.map(c => (
                 <button key={c} onClick={() => { setColor(c); setRainbow(false) }}
@@ -457,14 +443,11 @@ export default function App() {
           </div>
         </Section>
 
-        {/* Stage info banner */}
-        <div className="bg-white rounded-2xl px-5 py-4 shadow-sm">
-          <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">
-            Etapas de la partida
-          </p>
+        {/* ── Stage info ── */}
+        <Section title="Etapas de la partida">
           <div className="flex flex-col gap-2">
             {[1, 2, 3].map(s => {
-              const { emoji, name, label } = STAGES[s]
+              const { emoji, name } = STAGES[s]
               const desc = s === 1 ? 'Primera fila, columna o diagonal completa.' :
                            s === 2 ? 'Primera figura completa (configurable abajo).' :
                                      'Primer cartón con todas las celdas marcadas. Fin de la partida.'
@@ -475,23 +458,22 @@ export default function App() {
                     <p className="text-sm font-bold text-gray-800">
                       Etapa {s}: <span style={{ color: 'var(--primary)' }}>{name}</span>
                     </p>
-                    <p className="text-xs text-gray-400">{desc}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
                   </div>
                 </div>
               )
             })}
           </div>
-        </div>
+        </Section>
 
-        {/* Figure pattern (stage 2) */}
-        <Section title="Figura personalizada — Etapa 2">
-          {/* Presets */}
+        {/* ── Figure pattern (stage 2) ── */}
+        <Section title="Figura — Etapa 2">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
             Figuras predefinidas
           </p>
           <div className="flex flex-wrap gap-2 mb-4">
             {Object.entries(FIGURE_PRESETS).map(([name, fn]) => (
-              <button key={name} onClick={() => loadPreset(name)}
+              <button key={name} onClick={() => setPat(mkFigure(fn))}
                 className="flex flex-col items-center gap-1.5 px-3 pt-2.5 pb-2 rounded-xl border-2
                   transition-all hover:shadow-md hover:scale-105 active:scale-95"
                 style={{ borderColor: 'var(--primary-a35)' }}>
@@ -503,10 +485,8 @@ export default function App() {
               </button>
             ))}
           </div>
-
-          {/* Editable grid */}
           <p className="text-xs text-gray-500 mb-2">
-            Haz click para personalizar. <strong className="text-gray-700">★</strong> = FREE SPACE, siempre activo.
+            Toca para personalizar. <strong className="text-gray-700">★</strong> = FREE SPACE.
           </p>
           <div className="inline-block">
             <div className="grid grid-cols-5 gap-1 mb-1">
@@ -522,7 +502,7 @@ export default function App() {
                   style={{
                     background: pat[r][c] ? 'var(--primary)' : '#e5e7eb',
                     color:      pat[r][c] ? '#fff'            : '#9ca3af',
-                    cursor:     isFree(r,c) ? 'default'        : 'pointer',
+                    cursor:     isFree(r,c) ? 'default' : 'pointer',
                     boxShadow:  pat[r][c] ? '0 2px 8px var(--primary-a35)' : 'none',
                     transform:  pat[r][c] && !isFree(r,c) ? 'scale(1.07)' : 'scale(1)',
                   }}>
@@ -536,25 +516,26 @@ export default function App() {
           </p>
         </Section>
 
-        {/* Card builder */}
+        {/* ── Card builder ── */}
         <Section title="Agregar cartón">
           {cardError && (
-            <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm font-medium">
+            <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200
+              text-red-600 text-sm font-medium">
               {cardError}
             </div>
           )}
           <CardFormGrid form={form} onChange={updateForm} onSubmit={addCard} />
           <button onClick={addCard}
-            className="mt-4 w-full py-3 rounded-xl font-bold text-white text-sm transition-all
-              hover:opacity-90 active:scale-95 shadow-md"
+            className="mt-4 w-full py-3 rounded-xl font-bold text-white text-sm
+              transition-all hover:opacity-90 active:scale-95 shadow-md"
             style={{ background: 'var(--primary)' }}>
             + Agregar cartón
           </button>
         </Section>
 
-        {/* Saved card thumbnails */}
+        {/* ── Saved card thumbnails ── */}
         {cards.length > 0 && (
-          <Section title={`Cartones agregados — ${cards.length}`}>
+          <Section title={`Cartones (${cards.length})`}>
             <div className="flex flex-wrap gap-3">
               {cards.map((card, i) => (
                 <div key={card.id}
@@ -578,9 +559,9 @@ export default function App() {
                     )))}
                   </div>
                   <button onClick={() => setCards(prev => prev.filter(cc => cc.id !== card.id))}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500
-                      text-white text-xs font-bold flex items-center justify-center
-                      leading-none shadow-md hover:bg-red-600 transition-colors">
+                    className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-500
+                      text-white font-bold flex items-center justify-center leading-none shadow-md
+                      hover:bg-red-600 transition-colors text-sm">
                     ×
                   </button>
                 </div>
@@ -589,12 +570,12 @@ export default function App() {
           </Section>
         )}
 
-        {/* Start */}
+        {/* ── Start button ── */}
         <button onClick={startGame} disabled={cards.length === 0}
           className="w-full py-4 rounded-2xl text-white shadow-lg transition-all
             hover:shadow-xl hover:opacity-95 active:scale-95
             disabled:opacity-40 disabled:cursor-not-allowed bebas tracking-widest"
-          style={{ background: 'var(--primary)', fontSize: '1.6rem' }}>
+          style={{ background: 'var(--primary)', fontSize: '1.5rem' }}>
           INICIAR PARTIDA →
         </button>
         {cards.length === 0 && (
@@ -613,13 +594,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-100">
 
-      {/* Victory toast */}
+      {/* ── Victory toast ── */}
       {toast && (
-        <div className={`fixed top-5 left-1/2 z-50 bebas tracking-wider text-white
-          px-8 py-4 rounded-2xl shadow-2xl text-center pointer-events-none toast-enter
-          ${rainbow ? 'is-rainbow' : ''}`}
+        <div className={`fixed top-4 left-1/2 z-50 bebas tracking-wider text-white
+          px-6 py-3 rounded-2xl shadow-2xl text-center pointer-events-none toast-enter
+          whitespace-pre-line ${rainbow ? 'is-rainbow' : ''}`}
           style={{
-            maxWidth: '92vw', fontSize: '1.65rem',
+            maxWidth: '88vw', fontSize: 'clamp(1.1rem, 5vw, 1.6rem)',
+            lineHeight: 1.2,
             background: rainbow ? undefined : 'var(--primary)',
             transform: 'translateX(-50%)',
           }}>
@@ -627,12 +609,15 @@ export default function App() {
         </div>
       )}
 
-      {/* Mid-game add-card modal */}
+      {/* ── Add-card modal ── */}
       {modalOpen && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center"
           style={{ background: 'rgba(0,0,0,0.55)' }}
           onClick={e => e.target === e.currentTarget && setModalOpen(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+          {/* Sheet slides up from bottom on mobile, centered on desktop */}
+          <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm p-5 sm:p-6">
+            {/* Drag handle (mobile) */}
+            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
             <div className="flex items-center justify-between mb-4">
               <h2 className="font-bold text-gray-800">Agregar cartón</h2>
               <button onClick={() => setModalOpen(false)}
@@ -656,17 +641,17 @@ export default function App() {
             />
             {called.length > 0 && (
               <p className="text-xs text-gray-400 mt-2">
-                Los {called.length} número(s) cantados se marcarán automáticamente.
+                {called.length} número(s) ya cantados se marcarán automáticamente.
               </p>
             )}
             <div className="flex gap-2 mt-4">
               <button onClick={() => setModalOpen(false)}
-                className="flex-1 py-2.5 rounded-xl border-2 border-gray-200 text-gray-500
-                  font-bold text-sm hover:border-gray-300 active:scale-95 transition-all">
+                className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-500 font-bold
+                  text-sm hover:border-gray-300 active:scale-95 transition-all">
                 Cancelar
               </button>
               <button onClick={addCardInGame}
-                className="flex-1 py-2.5 rounded-xl text-white font-bold text-sm
+                className="flex-1 py-3 rounded-xl text-white font-bold text-sm
                   hover:opacity-90 active:scale-95 transition-all shadow-md"
                 style={{ background: 'var(--primary)' }}>
                 + Agregar
@@ -680,46 +665,49 @@ export default function App() {
       <header className={`text-white shadow-lg ${rainbow ? 'is-rainbow' : ''}`}
         style={{ background: rainbow ? undefined : 'var(--primary)' }}>
 
-        {/* Top row */}
-        <div className="px-4 pt-3 pb-2 flex items-center gap-2">
-          <h1 className="bebas text-3xl text-white flex-1 select-none" style={{ letterSpacing: '0.2em' }}>
+        {/* Top row: title + action buttons */}
+        <div className="px-3 sm:px-4 pt-3 pb-1.5 flex items-center gap-1.5 sm:gap-2">
+          <h1 className="bebas text-2xl sm:text-3xl text-white flex-1 select-none"
+            style={{ letterSpacing: '0.2em' }}>
             BINGO
           </h1>
+
+          {/* "+ Cartón" hidden on mobile (uses FAB instead) */}
           <button onClick={openModal}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
-              transition-all active:scale-95 whitespace-nowrap">
+            className="hidden sm:flex px-3 py-1.5 rounded-lg text-xs font-bold
+              bg-white/20 hover:bg-white/30 transition-all active:scale-95 whitespace-nowrap">
             + Cartón
           </button>
+
           <button onClick={undoLast} disabled={!called.length || gameOver}
             className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
               disabled:opacity-40 transition-all active:scale-95 whitespace-nowrap">
-            ↩ Deshacer
+            ↩<span className="hidden sm:inline"> Deshacer</span>
           </button>
+
           <button onClick={newGame}
             className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
               transition-all active:scale-95 whitespace-nowrap">
-            ✕ Nueva
+            ✕<span className="hidden sm:inline"> Nueva</span>
           </button>
         </div>
 
-        {/* Stage indicator row */}
-        <div className="px-4 pb-3 flex items-center gap-1.5 flex-wrap">
+        {/* Stage pills */}
+        <div className="px-3 sm:px-4 pb-3 flex items-center gap-1.5 flex-wrap">
           {[1, 2, 3].map(s => {
             const { emoji, name } = STAGES[s]
-            const isActive  = s === stage && !gameOver
-            const isDone    = s < stage || gameOver
-            const isPending = !isActive && !isDone
+            const isActive = s === stage && !gameOver
+            const isDone   = s < stage || gameOver
             return (
               <div key={s}
                 className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold
                   transition-all duration-300 select-none
-                  ${isActive  ? 'bg-white text-gray-800 shadow-md scale-105' :
-                    isDone    ? 'bg-white/30 text-white/90'                  :
-                                'bg-white/10 text-white/40'}`}>
+                  ${isActive ? 'bg-white text-gray-800 shadow-md scale-105' :
+                    isDone   ? 'bg-white/30 text-white/90' : 'bg-white/10 text-white/40'}`}>
                 <span>{emoji}</span>
                 <span className="hidden sm:inline">{name}</span>
                 {isActive && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 pulse-dot inline-block ml-0.5" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 pulse-dot ml-0.5 inline-block" />
                 )}
                 {isDone && <span className="ml-0.5 opacity-80">✓</span>}
               </div>
@@ -727,49 +715,69 @@ export default function App() {
           })}
           {gameOver && (
             <span className="px-2.5 py-1 rounded-full text-xs font-bold
-              bg-yellow-400 text-yellow-900 ml-1 animate-bounce">
+              bg-yellow-400 text-yellow-900 ml-1">
               🎊 ¡Fin!
             </span>
           )}
         </div>
       </header>
 
-      <div className="max-w-5xl mx-auto p-4 space-y-4">
+      {/* ── Floating action button — "+ Cartón" on mobile only ── */}
+      {!gameOver && (
+        <button onClick={openModal}
+          className="fixed bottom-5 right-4 z-30 sm:hidden w-14 h-14 rounded-full
+            text-white text-3xl font-bold flex items-center justify-center
+            shadow-2xl active:scale-90 transition-transform"
+          style={{ background: 'var(--primary)' }}
+          aria-label="Agregar cartón">
+          +
+        </button>
+      )}
 
-        {/* Number input */}
-        <div className="bg-white rounded-2xl p-4 shadow-sm">
-          <div className="flex gap-3">
+      <div className="max-w-5xl mx-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
+
+        {/* ── Number input ── */}
+        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+          <div className="flex gap-2 sm:gap-3">
             <input
               ref={inputRef} type="number" min="1" max="75"
+              inputMode="numeric"
               value={numInput}
               onChange={e => setNumInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && callNum()}
               disabled={gameOver}
-              className="flex-1 h-16 rounded-xl border-2 text-center font-black focus:outline-none
-                transition-colors bebas tracking-widest disabled:bg-gray-50 disabled:text-gray-300"
-              style={{ borderColor: numInput ? 'var(--primary)' : '#e5e7eb', fontSize: '2.4rem' }}
-              placeholder="00" autoFocus
+              className="flex-1 h-14 sm:h-16 rounded-xl border-2 text-center font-black
+                focus:outline-none transition-colors bebas tracking-widest
+                disabled:bg-gray-50 disabled:text-gray-300"
+              style={{
+                borderColor: numInput ? 'var(--primary)' : '#e5e7eb',
+                fontSize: 'clamp(1.6rem, 8vw, 2.4rem)',
+              }}
+              placeholder="00"
             />
             <button onClick={callNum} disabled={gameOver}
-              className="px-8 h-16 rounded-xl font-black text-white transition-all
+              className="px-5 sm:px-8 h-14 sm:h-16 rounded-xl font-black text-white transition-all
                 hover:opacity-90 active:scale-95 whitespace-nowrap shadow-md bebas tracking-widest
-                disabled:opacity-40 disabled:cursor-not-allowed"
-              style={{ background: 'var(--primary)', fontSize: '1.4rem' }}>
+                disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+              style={{
+                background: 'var(--primary)',
+                fontSize: 'clamp(1rem, 4vw, 1.4rem)',
+              }}>
               CANTAR
             </button>
           </div>
           {gameError && <p className="text-red-500 text-sm mt-2 font-medium">{gameError}</p>}
           {gameOver && (
             <p className="text-center text-gray-400 text-sm mt-2">
-              Partida terminada — presiona <strong>Nueva</strong> para jugar otra vez.
+              Partida terminada — toca <strong>✕</strong> para jugar otra vez.
             </p>
           )}
         </div>
 
-        {/* Called balls */}
-        <div className="bg-white rounded-2xl p-4 shadow-sm">
+        {/* ── Called balls ── */}
+        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
           <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">
-            Números cantados — {called.length} / 75
+            Cantados — {called.length} / 75
           </p>
           <div ref={ballsRef}
             className="flex gap-2 overflow-x-auto pb-1"
@@ -798,8 +806,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Game cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+        {/* ── Game cards grid ──
+              1 column on mobile, 2 on sm, 3 on xl                          */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4
+          pb-20 sm:pb-0">  {/* bottom padding clears the FAB on mobile */}
           {gameCards.map(card => {
             const hasBadge = card.badges.length > 0
             return (
@@ -807,13 +817,13 @@ export default function App() {
                 className="bg-white rounded-2xl overflow-hidden transition-all duration-300"
                 style={{
                   boxShadow: hasBadge
-                    ? '0 0 0 3px var(--primary), 0 8px 32px var(--primary-a35)'
+                    ? '0 0 0 3px var(--primary), 0 6px 24px var(--primary-a35)'
                     : '0 1px 4px rgba(0,0,0,0.08)',
                 }}>
 
                 {/* Card header */}
                 <div className={`px-3 py-2.5 flex items-center gap-2 transition-colors duration-300
-                    ${hasBadge && rainbow ? 'is-rainbow' : ''}`}
+                  ${hasBadge && rainbow ? 'is-rainbow' : ''}`}
                   style={{
                     background:   hasBadge && !rainbow ? 'var(--primary)' :
                                   hasBadge &&  rainbow ? undefined         : '#f9fafb',
@@ -823,16 +833,11 @@ export default function App() {
                     ${hasBadge ? 'text-white' : 'text-gray-700'}`}>
                     Cartón #{card.idx}
                   </span>
-                  {/* Stage badges */}
                   <div className="flex items-center gap-0.5">
                     {[1, 2, 3].map(s => {
                       const { badge, emoji, label } = STAGES[s]
                       if (!card.badges.includes(badge)) return null
-                      return (
-                        <span key={s} className="text-base leading-none" title={label}>
-                          {emoji}
-                        </span>
-                      )
+                      return <span key={s} className="text-base leading-none" title={label}>{emoji}</span>
                     })}
                     {!hasBadge && (
                       <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">
@@ -853,23 +858,25 @@ export default function App() {
                 </div>
 
                 {/* Cell grid */}
-                <div className="grid grid-cols-5 gap-1.5 p-2.5">
+                <div className="grid grid-cols-5 gap-1 p-2 sm:gap-1.5 sm:p-2.5">
                   {card.numbers.map((row, r) => row.map((n, c) => {
-                    const free   = isFree(r, c)
-                    const marked = card.marked[r][c]
+                    const free        = isFree(r, c)
+                    const marked      = card.marked[r][c]
                     const cellRainbow = (free || marked) && rainbow
                     return (
                       <button key={`${r}${c}`}
                         onClick={() => toggleCell(card.id, r, c)}
                         disabled={free}
-                        className={`bingo-cell aspect-square rounded-lg flex items-center justify-center
-                          font-bold ${marked && !free ? 'marked' : ''} ${cellRainbow ? 'is-rainbow' : ''}`}
+                        className={`bingo-cell aspect-square rounded-lg flex items-center
+                          justify-center font-bold
+                          ${marked && !free ? 'marked' : ''}
+                          ${cellRainbow ? 'is-rainbow' : ''}`}
                         style={{
                           background: (free || marked) && !rainbow ? 'var(--primary)' :
                                       (free || marked) &&  rainbow ? undefined         : '#f3f4f6',
                           color:      free || marked ? '#fff' : '#374151',
                           cursor:     free ? 'default' : 'pointer',
-                          fontSize:   '0.72rem',
+                          fontSize:   'clamp(0.6rem, 2.5vw, 0.8rem)',
                           boxShadow:  marked && !free && !rainbow
                             ? '0 2px 8px var(--primary-a35)' : 'none',
                         }}>
