@@ -2,6 +2,7 @@
 
 export const COLS = ['B', 'I', 'N', 'G', 'O']
 export const FREE = '*'
+export const letterOf = n => COLS[Math.min(4, Math.floor((n - 1) / 15))]
 
 export const mkGrid = fill =>
   Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => fill(r, c)))

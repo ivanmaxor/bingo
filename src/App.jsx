@@ -3,7 +3,7 @@ import {
   COLS, FREE, mkGrid, emptyForm, noManual, emptyPat,
   FIGURE_PRESETS, patFromPreset, PRIZE_EMOJI, defaultPrizes,
   cardMarked, formToNumbers, numbersToForm, sameNumbers, analyzeForm,
-  missing, evaluate, winMessage, parseCardsText, AI_PROMPT,
+  missing, evaluate, winMessage, parseCardsText, AI_PROMPT, letterOf,
 } from './logic'
 
 // ── External libs ─────────────────────────────────────────────────────────────
@@ -78,7 +78,7 @@ function syncCssColor(hex) {
 
 function Section({ title, children, right }) {
   return (
-    <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm">
+    <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm section-enter">
       {title && (
         <div className="flex items-center justify-between mb-3 gap-2">
           <p className="font-bold text-gray-500 text-xs uppercase tracking-wider">{title}</p>
@@ -257,10 +257,10 @@ function CardModal({ title, form, setForm, error, onSave, onClose, onDelete, not
   const [freeMode, setFreeMode] = useState(false)
   const update = (r, c, v) => setForm(f => f.map((row, ri) => row.map((x, ci) => (ri === r && ci === c ? v : x))))
   return (
-    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center"
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center fade-in"
       style={{ background: 'rgba(0,0,0,0.55)' }}
       onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm p-5 sm:p-6 max-h-[92vh] overflow-y-auto sheet-enter">
         <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-bold text-gray-800">{title}</h2>
@@ -291,30 +291,125 @@ function CardModal({ title, form, setForm, error, onSave, onClose, onDelete, not
   )
 }
 
-// Called-number board ordered by letter: tap a number to call it.
-function CallBoard({ called, onCall, disabled }) {
+// Smoothly expands / collapses its children.
+function Collapse({ open, children }) {
+  return (
+    <div className="collapse-grid" data-open={open}>
+      <div className="min-h-0 overflow-hidden">{children}</div>
+    </div>
+  )
+}
+
+const CALL_MODES = [['letters', 'Por letra'], ['board', 'Tablero'], ['type', 'Teclear']]
+
+// Calling numbers: by letter (tap the letter you hear, then the number), full board, or typing.
+function CallPanel({ mode, setMode, letter, setLetter, called, onCall, disabled, numInput, setNumInput, onType, error }) {
   const set = new Set(called)
   const last = called[called.length - 1]
+  const [shown, setShown] = useState(0)
+  if (letter !== null && letter !== shown) setShown(letter)
+  const numsOf = ci => Array.from({ length: 15 }, (_, i) => ci * 15 + 1 + i)
+
+  const numBtn = (n, h) => {
+    const on = set.has(n)
+    return (
+      <button key={n} type="button" onClick={() => onCall(n)} disabled={disabled || on}
+        className={`${h} rounded-xl font-bold transition-all duration-150 active:scale-90 disabled:cursor-default`}
+        style={{
+          background: n === last ? 'var(--primary)' : on ? 'var(--primary-a12)' : '#f3f4f6',
+          color: n === last ? '#fff' : on ? 'var(--primary)' : '#1f2937',
+          opacity: on && n !== last ? 0.55 : 1,
+          fontSize: '0.95rem',
+        }}>
+        {n}
+      </button>
+    )
+  }
+
   return (
-    <div className="grid grid-cols-5 gap-1.5">
-      {COLS.map((l, ci) => (
-        <div key={l} className="flex flex-col gap-1">
-          <div className="text-center text-sm font-black bebas tracking-wider" style={{ color: 'var(--primary)' }}>{l}</div>
-          {Array.from({ length: 15 }, (_, i) => ci * 15 + 1 + i).map(n => {
-            const on = set.has(n)
-            return (
-              <button key={n} type="button" onClick={() => onCall(n)} disabled={disabled || on}
-                className="h-8 rounded-md text-xs font-bold transition-all active:scale-90 disabled:cursor-default"
-                style={{
-                  background: n === last ? 'var(--primary)' : on ? 'var(--primary-a35)' : '#f3f4f6',
-                  color: n === last ? '#fff' : on ? 'var(--primary-dark)' : '#374151',
-                }}>
-                {n}
-              </button>
-            )
-          })}
+    <div>
+      <div className="flex items-center gap-2 mb-2.5">
+        <div className="flex-1 grid grid-cols-3 gap-0.5 bg-gray-100 rounded-xl p-0.5">
+          {CALL_MODES.map(([m, label]) => (
+            <button key={m} type="button" onClick={() => { setMode(m); setLetter(null) }}
+              className={`py-1.5 rounded-[10px] text-xs font-bold transition-all duration-200 active:scale-95
+                ${mode === m ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+              style={mode === m ? { color: 'var(--primary)' } : undefined}>
+              {label}
+            </button>
+          ))}
         </div>
-      ))}
+        <div key={last ?? 'none'} className="flex-shrink-0 min-w-[3.6rem] text-center ball-pop">
+          <p className="text-[9px] font-bold text-gray-400 uppercase leading-none">Último</p>
+          <p className="bebas text-xl leading-none mt-0.5" style={{ color: 'var(--primary)' }}>
+            {last ? <><span className="font-sans font-black text-base">{letterOf(last)}</span>-{last}</> : '—'}
+          </p>
+        </div>
+      </div>
+
+      {mode === 'letters' && (
+        <>
+          <Collapse open={letter !== null}>
+            <div className="grid grid-cols-5 gap-1.5 pb-2.5">
+              {numsOf(shown).map(n => numBtn(n, 'h-11'))}
+            </div>
+          </Collapse>
+          <div className="grid grid-cols-5 gap-1.5">
+            {COLS.map((l, ci) => {
+              const sel = letter === ci
+              const got = numsOf(ci).filter(n => set.has(n)).length
+              return (
+                <button key={l} type="button" disabled={disabled}
+                  onClick={() => setLetter(sel ? null : ci)}
+                  className="h-14 rounded-xl flex flex-col items-center justify-center leading-none
+                    transition-all duration-200 active:scale-90 disabled:opacity-40"
+                  style={{
+                    background: sel ? 'var(--primary)' : 'var(--primary-a12)',
+                    color: sel ? '#fff' : 'var(--primary)',
+                    transform: sel ? 'translateY(-2px)' : 'none',
+                    boxShadow: sel ? '0 6px 16px var(--primary-a35)' : 'none',
+                  }}>
+                  <span className="bebas text-3xl">{l}</span>
+                  <span className="text-[9px] font-bold opacity-70 mt-0.5">{got}/15</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {mode === 'board' && (
+        <div className="grid grid-cols-5 gap-1.5 max-h-[42vh] lg:max-h-none overflow-y-auto no-scrollbar rounded-xl">
+          {COLS.map((l, ci) => (
+            <div key={l} className="flex flex-col gap-1">
+              <div className="text-center text-sm font-black bebas tracking-wider sticky top-0 bg-white py-0.5"
+                style={{ color: 'var(--primary)' }}>{l}</div>
+              {numsOf(ci).map(n => numBtn(n, 'h-8'))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mode === 'type' && (
+        <div className="flex gap-2">
+          <input type="number" min="1" max="75" inputMode="numeric"
+            value={numInput} onChange={e => setNumInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && onType()}
+            disabled={disabled}
+            className="flex-1 min-w-0 h-14 rounded-xl border-2 text-center font-black focus:outline-none
+              transition-colors bebas tracking-widest disabled:bg-gray-50 disabled:text-gray-300"
+            style={{ borderColor: numInput ? 'var(--primary)' : '#e5e7eb', fontSize: '2rem' }}
+            placeholder="00" />
+          <button type="button" onMouseDown={e => e.preventDefault()} onClick={onType} disabled={disabled}
+            className="px-6 h-14 rounded-xl font-black text-white transition-all active:scale-95 shadow-md
+              bebas tracking-widest disabled:opacity-40 flex-shrink-0"
+            style={{ background: 'var(--primary)', fontSize: '1.3rem' }}>
+            CANTAR
+          </button>
+        </div>
+      )}
+
+      {error && <p key={error} className="text-red-500 text-sm mt-2 font-medium section-enter">{error}</p>}
     </div>
   )
 }
@@ -344,16 +439,15 @@ export default function App() {
   const [numInput,  setNumInput]  = useState('')
   const [gameError, setGameError] = useState('')
   const [toast,     setToast]     = useState(null)
-  const [showBoard, setShowBoard] = useState(S.showBoard !== false)
-  const [onlyNear,  setOnlyNear]  = useState(false)
-  const [nearN,     setNearN]     = useState(2)
+  const [callMode,  setCallMode]  = useState(['letters', 'board', 'type'].includes(S.callMode) ? S.callMode : 'letters')
+  const [letter,    setLetter]    = useState(null)
+  const [filterN,   setFilterN]   = useState(0)
 
   // Card modal: { mode: 'add' | 'edit', id? }
   const [modal,      setModal]      = useState(null)
   const [modalForm,  setModalForm]  = useState(emptyForm)
   const [modalError, setModalError] = useState('')
 
-  const inputRef   = useRef(null)
   const ballsRef   = useRef(null)
   const toastTimer = useRef([])
 
@@ -361,9 +455,9 @@ export default function App() {
   useEffect(() => { loadConfetti() }, [])
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ color, rainbow, prizes, cards, started, called, awards, showBoard }))
+      localStorage.setItem(STORE_KEY, JSON.stringify({ color, rainbow, prizes, cards, started, called, awards, callMode }))
     } catch { /* storage full or blocked */ }
-  }, [color, rainbow, prizes, cards, started, called, awards, showBoard])
+  }, [color, rainbow, prizes, cards, started, called, awards, callMode])
 
   const gameOver = started && prizes.length > 0 && prizes.every(p => awards[p.id])
 
@@ -492,13 +586,13 @@ export default function App() {
     if (gameOver) return
     if (isNaN(n) || n < 1 || n > 75) { setGameError('Número entre 1 y 75'); return }
     if (called.includes(n))           { setGameError(`El ${n} ya fue cantado`); return }
-    setGameError(''); setNumInput('')
+    setGameError(''); setNumInput(''); setLetter(null)
     commit(cards, [...called, n], awards, true)
     setTimeout(() => {
       if (ballsRef.current) ballsRef.current.scrollLeft = ballsRef.current.scrollWidth
     }, 40)
   }
-  const callNum = () => { callValue(parseInt(numInput, 10)); inputRef.current?.focus() }
+  const callNum = () => callValue(parseInt(numInput, 10))
 
   const undoLast = () => {
     if (!called.length) return
@@ -574,7 +668,7 @@ export default function App() {
   if (!started) {
     const draftValid = drafts.filter(d => analyzeForm(d.form).valid)
     return (
-      <div className="min-h-screen bg-gray-50 pb-12">
+      <div className="min-h-screen bg-gray-50 pb-12 screen-enter">
         {cardModal}
 
         <header className={`text-white text-center py-8 sm:py-10 mb-5 shadow-xl ${rainbow ? 'is-rainbow' : ''}`}
@@ -586,8 +680,9 @@ export default function App() {
           </p>
         </header>
 
-        <div className="max-w-xl mx-auto px-3 sm:px-4 space-y-4">
+        <div className="max-w-xl lg:max-w-6xl mx-auto px-3 sm:px-4 space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-4 lg:items-start">
 
+         <div className="space-y-4 min-w-0">
           {/* ── Color ── */}
           <Section title="Color primario">
             <div className="space-y-3">
@@ -695,6 +790,8 @@ export default function App() {
             </div>
           </Section>
 
+         </div>
+         <div className="space-y-4 min-w-0">
           {/* ── Import ── */}
           <Section title="Importar cartones desde texto">
             <p className="text-xs text-gray-500 mb-3">
@@ -830,6 +927,8 @@ export default function App() {
             </Section>
           )}
 
+         </div>
+         <div className="lg:col-span-2 w-full max-w-xl mx-auto space-y-4">
           {startError && <ErrorBox>{startError}</ErrorBox>}
           <button onClick={startGame} disabled={cards.length === 0}
             className="w-full py-4 rounded-2xl text-white shadow-lg transition-all hover:shadow-xl
@@ -840,6 +939,7 @@ export default function App() {
           {cards.length === 0 && (
             <p className="text-center text-gray-400 text-xs -mt-2">Agrega al menos un cartón para comenzar</p>
           )}
+         </div>
         </div>
       </div>
     )
@@ -857,14 +957,20 @@ export default function App() {
     return ms.length ? Math.min(...ms) : Infinity
   }
   const shownIdx = cards.map((_, i) => i)
-    .filter(i => !onlyNear || closest(i) <= nearN)
-    .sort((a, b) => (onlyNear ? closest(a) - closest(b) || a - b : 0))
+    .filter(i => !filterN || closest(i) <= filterN)
+    .sort((a, b) => (filterN ? closest(a) - closest(b) || a - b : 0))
+  const chipN = filterN || 2
+
+  const callPanelProps = {
+    mode: callMode, setMode: setCallMode, letter, setLetter, called, onCall: callValue,
+    disabled: gameOver, numInput, setNumInput, onType: callNum, error: gameError,
+  }
 
   return (
-    <div className="min-h-screen bg-gray-100">
+    <div className="min-h-screen bg-gray-100 screen-enter">
 
       {toast && (
-        <div className={`fixed top-4 left-1/2 z-50 bebas tracking-wider text-white
+        <div key={toast.msg} className={`fixed top-4 left-1/2 z-50 bebas tracking-wider text-white
           px-6 py-3 rounded-2xl shadow-2xl text-center pointer-events-none toast-enter
           whitespace-pre-line ${rainbow ? 'is-rainbow' : ''}`}
           style={{
@@ -878,35 +984,38 @@ export default function App() {
 
       {cardModal}
 
-      <header className={`text-white shadow-lg ${rainbow ? 'is-rainbow' : ''}`}
+      <header className={`text-white shadow-lg sticky top-0 z-20 ${rainbow ? 'is-rainbow' : ''}`}
         style={{ background: rainbow ? undefined : 'var(--primary)' }}>
-        <div className="px-3 sm:px-4 pt-3 pb-1.5 flex items-center gap-1.5 sm:gap-2">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 pt-2.5 pb-1.5 flex items-center gap-1.5 sm:gap-2">
           <h1 className="bebas text-2xl sm:text-3xl text-white flex-1 select-none" style={{ letterSpacing: '0.2em' }}>
             BINGO
           </h1>
-          <button onClick={openAdd}
-            className="hidden sm:flex px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20
-              hover:bg-white/30 transition-all active:scale-95 whitespace-nowrap">+ Cartón</button>
-          <button onClick={undoLast} disabled={!called.length}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
-              disabled:opacity-40 transition-all active:scale-95 whitespace-nowrap">
-            ↩<span className="hidden sm:inline"> Deshacer</span>
+          <button onClick={openAdd} title="Agregar cartón" aria-label="Agregar cartón"
+            className="h-9 min-w-9 px-2.5 rounded-full text-sm font-bold bg-white/20 hover:bg-white/30
+              transition-all active:scale-90 whitespace-nowrap">
+            +<span className="hidden sm:inline text-xs"> Cartón</span>
+          </button>
+          <button onClick={undoLast} disabled={!called.length} title="Deshacer último número" aria-label="Deshacer último número"
+            className="h-9 min-w-9 px-2.5 rounded-full text-sm font-bold bg-white/20 hover:bg-white/30
+              disabled:opacity-40 transition-all active:scale-90 whitespace-nowrap">
+            ↩<span className="hidden sm:inline text-xs"> Deshacer</span>
           </button>
           <button onClick={() => { if (window.confirm('¿Terminar la partida y volver a la configuración? Se conservan los cartones.')) backToConfig() }}
-            className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
-              transition-all active:scale-95 whitespace-nowrap">
-            ✕<span className="hidden sm:inline"> Nueva</span>
+            title="Nueva partida" aria-label="Nueva partida"
+            className="h-9 min-w-9 px-2.5 rounded-full text-sm font-bold bg-white/20 hover:bg-white/30
+              transition-all active:scale-90 whitespace-nowrap">
+            ✕<span className="hidden sm:inline text-xs"> Nueva</span>
           </button>
         </div>
 
-        {/* Prize pills */}
-        <div className="px-3 sm:px-4 pb-3 flex items-center gap-1.5 flex-wrap">
+        <div className="max-w-7xl mx-auto px-3 sm:px-4 pb-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
           {prizes.map(p => {
             const done = !!awards[p.id]
             return (
               <div key={p.id}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold select-none
-                  ${done ? 'bg-white/30 text-white/90' : 'bg-white text-gray-800 shadow-md'}`}>
+                className={`flex-shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold select-none
+                  transition-all duration-300
+                  ${done ? 'bg-white/25 text-white/90' : 'bg-white text-gray-800 shadow-md'}`}>
                 <span>{PRIZE_EMOJI[p.type]}</span>
                 <span>{p.name}</span>
                 {done ? <span className="opacity-80">✓</span>
@@ -915,243 +1024,220 @@ export default function App() {
             )
           })}
           {gameOver && (
-            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-400 text-yellow-900 ml-1">🎊 ¡Fin!</span>
+            <span className="flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-400 text-yellow-900 ml-1">🎊 ¡Fin!</span>
           )}
         </div>
       </header>
 
-      {!gameOver && (
-        <button onClick={openAdd}
-          className="fixed bottom-5 right-4 z-30 sm:hidden w-14 h-14 rounded-full text-white text-3xl
-            font-bold flex items-center justify-center shadow-2xl active:scale-90 transition-transform"
-          style={{ background: 'var(--primary)' }} aria-label="Agregar cartón">+</button>
-      )}
+      {/* Mobile dock: call numbers without scrolling */}
+      <div className="lg:hidden fixed bottom-0 inset-x-0 z-30 bg-white border-t border-gray-200 rounded-t-3xl px-3 pt-3"
+        style={{ boxShadow: '0 -10px 30px rgba(0,0,0,0.12)', paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+        <CallPanel {...callPanelProps} />
+      </div>
 
-      <div className="max-w-5xl mx-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
+      <div className="max-w-7xl mx-auto p-3 sm:p-4 pb-80 lg:pb-6 lg:grid lg:grid-cols-[21rem_minmax(0,1fr)] lg:gap-5 lg:items-start">
 
-        {/* Number input */}
-        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
-          <div className="flex gap-2 sm:gap-3">
-            <input ref={inputRef} type="number" min="1" max="75" inputMode="numeric"
-              value={numInput} onChange={e => setNumInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && callNum()}
-              disabled={gameOver}
-              className="flex-1 h-14 sm:h-16 rounded-xl border-2 text-center font-black focus:outline-none
-                transition-colors bebas tracking-widest disabled:bg-gray-50 disabled:text-gray-300"
-              style={{ borderColor: numInput ? 'var(--primary)' : '#e5e7eb', fontSize: 'clamp(1.6rem, 8vw, 2.4rem)' }}
-              placeholder="00" />
-            <button onClick={callNum} disabled={gameOver}
-              className="px-5 sm:px-8 h-14 sm:h-16 rounded-xl font-black text-white transition-all
-                hover:opacity-90 active:scale-95 whitespace-nowrap shadow-md bebas tracking-widest
-                disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-              style={{ background: 'var(--primary)', fontSize: 'clamp(1rem, 4vw, 1.4rem)' }}>
-              CANTAR
-            </button>
+        <aside className="space-y-3 sm:space-y-4 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-1">
+
+          {/* Desktop call panel */}
+          <div className="hidden lg:block bg-white rounded-2xl p-4 shadow-sm">
+            <CallPanel {...callPanelProps} />
           </div>
-          {gameError && <p className="text-red-500 text-sm mt-2 font-medium">{gameError}</p>}
-          {gameOver && (
-            <p className="text-center text-gray-400 text-sm mt-2">
-              Todos los premios entregados — toca <strong>✕</strong> para jugar otra vez (↩ para deshacer el último número).
-            </p>
-          )}
-        </div>
 
-        {/* Letter board */}
-        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
-          <button onClick={() => setShowBoard(v => !v)}
-            className="w-full flex items-center justify-between text-xs font-bold text-gray-400 tracking-wider uppercase">
-            <span>Tablero B-I-N-G-O · toca para cantar</span>
-            <span>{showBoard ? '▲ ocultar' : '▼ mostrar'}</span>
-          </button>
-          {showBoard && (
-            <div className="mt-3">
-              <CallBoard called={called} onCall={callValue} disabled={gameOver} />
-            </div>
-          )}
-        </div>
-
-        {/* Prize status */}
-        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
-          <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">Premios</p>
-          <div className="space-y-1.5">
-            {prizes.map(p => {
-              const a = awards[p.id]
-              let near = null
-              if (!a) {
-                const m = marks.map((mk, i) => ({ i, m: missing(p, mk) })).filter(x => x.m > 0)
-                if (m.length) {
-                  const best = Math.min(...m.map(x => x.m))
-                  near = `Más cerca: cartón${m.filter(x => x.m === best).length > 1 ? 'es' : ''} ${
-                    m.filter(x => x.m === best).map(x => '#' + (x.i + 1)).join(', ')} (${best === 1 ? 'falta 1' : `faltan ${best}`})`
+          {/* Prize status */}
+          <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+            <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">Premios</p>
+            <div className="space-y-2">
+              {prizes.map(p => {
+                const a = awards[p.id]
+                let near = null
+                if (!a) {
+                  const m = marks.map((mk, i) => ({ i, m: missing(p, mk) })).filter(x => x.m > 0)
+                  if (m.length) {
+                    const best = Math.min(...m.map(x => x.m))
+                    const who = m.filter(x => x.m === best).map(x => '#' + (x.i + 1)).join(', ')
+                    near = `Más cerca: ${who} (${best === 1 ? 'falta 1' : `faltan ${best}`})`
+                  }
                 }
-              }
-              return (
-                <div key={p.id} className="flex items-start gap-2 text-sm">
-                  <span className="flex-shrink-0">{PRIZE_EMOJI[p.type]}</span>
-                  <span className="font-bold text-gray-700 flex-shrink-0">{p.name}:</span>
-                  <span className="flex-1 min-w-0">
-                    {a?.external ? (
-                      <span className="text-gray-500 font-semibold">✓ Ya lo ganó otra persona <span className="font-normal text-gray-400">(no cuenta)</span></span>
-                    ) : a ? (
-                      <span className="text-green-600 font-semibold">
-                        ✓ {a.cardIds.length > 1 ? 'Cartones' : 'Cartón'} {a.cardIds.map(id => '#' + idxOf(id)).filter(s => s !== '#0').join(', ')}
-                        {a.last !== null && <span className="text-gray-400 font-normal"> · con el {a.last}</span>}
-                      </span>
-                    ) : (
-                      <span className="text-gray-400">pendiente{near ? ` · ${near}` : ''}</span>
-                    )}
-                  </span>
-                  {a?.external && (
-                    <button onClick={() => unmarkTaken(p)}
-                      className="flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-lg border border-gray-300 text-gray-500">Quitar marca</button>
-                  )}
-                  {!a && !gameOver && (
-                    <button onClick={() => markTaken(p)}
-                      className="flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-lg border border-amber-300 text-amber-700 bg-amber-50">
-                      Ya lo ganó otro
-                    </button>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Called balls */}
-        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
-          <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">
-            Cantados — {called.length} / 75
-          </p>
-          <div ref={ballsRef} className="flex gap-2 overflow-x-auto pb-1"
-            style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--primary-a35) transparent' }}>
-            {called.length === 0
-              ? <span className="text-gray-300 text-sm py-2 px-1 italic">Aún sin números…</span>
-              : called.map((n, i) => {
-                  const isLast = i === called.length - 1
-                  return (
-                    <div key={i}
-                      className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center
-                        font-black bebas transition-all duration-200 ${isLast && rainbow ? 'is-rainbow' : ''}`}
-                      style={{
-                        background: isLast && !rainbow ? 'var(--primary)' : isLast ? undefined : '#f3f4f6',
-                        color: isLast ? '#fff' : '#4b5563',
-                        transform: isLast ? 'scale(1.22)' : 'scale(1)',
-                        boxShadow: isLast && !rainbow ? '0 3px 12px var(--primary-a35)' : 'none',
-                        fontSize: '1rem',
-                      }}>
-                      {n}
+                return (
+                  <div key={p.id} className="flex items-start gap-2 text-sm">
+                    <span className="flex-shrink-0">{PRIZE_EMOJI[p.type]}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-bold text-gray-700">{p.name}: </span>
+                      {a?.external ? (
+                        <span className="text-gray-500 font-semibold">✓ Ya lo ganó otra persona <span className="font-normal text-gray-400">(no cuenta)</span></span>
+                      ) : a ? (
+                        <span className="text-green-600 font-semibold">
+                          ✓ {a.cardIds.length > 1 ? 'Cartones' : 'Cartón'} {a.cardIds.map(id => '#' + idxOf(id)).filter(s => s !== '#0').join(', ')}
+                          {a.last !== null && <span className="text-gray-400 font-normal"> · con el {a.last}</span>}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">pendiente{near ? ` · ${near}` : ''}</span>
+                      )}
                     </div>
-                  )
-                })}
-          </div>
-        </div>
-
-        {/* Card filter */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <button onClick={() => setOnlyNear(v => !v)}
-            className={`px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all active:scale-95
-              ${onlyNear ? 'text-white border-transparent' : 'border-gray-200 text-gray-500 bg-white'}`}
-            style={onlyNear ? { background: 'var(--primary)' } : undefined}>
-            🎯 Solo cercanos{onlyNear ? ` (${shownIdx.length})` : ''}
-          </button>
-          <div className="flex items-center gap-1 text-xs font-bold text-gray-400">
-            faltan ≤
-            {[1, 2, 3].map(n => (
-              <button key={n} onClick={() => setNearN(n)}
-                className={`w-7 h-7 rounded-lg border-2 ${nearN === n ? 'text-white border-transparent' : 'border-gray-200 text-gray-500 bg-white'}`}
-                style={nearN === n ? { background: 'var(--primary)' } : undefined}>{n}</button>
-            ))}
-          </div>
-          {onlyNear && shownIdx.length === 0 && (
-            <span className="text-xs text-gray-400">Ningún cartón está tan cerca todavía.</span>
-          )}
-        </div>
-
-        {/* Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 pb-20 sm:pb-0">
-          {shownIdx.map(ci => {
-            const card = cards[ci]
-            const mk = marks[ci]
-            const wonPrizes = prizes.filter(p => awards[p.id]?.cardIds.includes(card.id))
-            const hasBadge = wonPrizes.length > 0
-            const near = prizes
-              .filter(p => !awards[p.id])
-              .map(p => ({ p, m: missing(p, mk) }))
-              .filter(x => x.m > 0 && x.m <= nearN)
-            return (
-              <div key={card.id} className="bg-white rounded-2xl overflow-hidden transition-all duration-300"
-                style={{
-                  boxShadow: hasBadge
-                    ? '0 0 0 3px var(--primary), 0 6px 24px var(--primary-a35)'
-                    : '0 1px 4px rgba(0,0,0,0.08)',
-                }}>
-                <div className={`px-3 py-2.5 flex items-center gap-2 transition-colors duration-300
-                  ${hasBadge && rainbow ? 'is-rainbow' : ''}`}
-                  style={{
-                    background: hasBadge && !rainbow ? 'var(--primary)' : hasBadge && rainbow ? undefined : '#f9fafb',
-                    borderBottom: '1px solid #e5e7eb',
-                  }}>
-                  <span className={`bebas tracking-wider text-sm flex-1 ${hasBadge ? 'text-white' : 'text-gray-700'}`}>
-                    Cartón #{ci + 1}
-                  </span>
-                  <div className="flex items-center gap-1 flex-wrap justify-end">
-                    {wonPrizes.map(p => (
-                      <span key={p.id} className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/25 text-white"
-                        title={p.name}>{PRIZE_EMOJI[p.type]} {p.name}</span>
-                    ))}
-                    {!hasBadge && (
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Jugando</span>
+                    {a?.external && (
+                      <button onClick={() => unmarkTaken(p)}
+                        className="flex-shrink-0 text-xs font-bold px-2 py-1 rounded-lg border border-gray-300 text-gray-500 active:scale-95 transition-transform">Quitar marca</button>
                     )}
-                    {!gameOver && (
-                      <button onClick={() => openEdit(card)} title="Corregir números"
-                        className={`w-6 h-6 rounded-full text-xs flex items-center justify-center
-                          ${hasBadge ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>✎</button>
+                    {!a && !gameOver && (
+                      <button onClick={() => markTaken(p)}
+                        className="flex-shrink-0 text-xs font-bold px-2 py-1 rounded-lg border border-amber-300 text-amber-700 bg-amber-50 active:scale-95 transition-transform">
+                        Ya lo ganó otro
+                      </button>
                     )}
                   </div>
-                </div>
+                )
+              })}
+            </div>
+            {gameOver && (
+              <p className="text-xs text-gray-400 mt-3 pt-3 border-t border-gray-100">
+                Todos los premios entregados — toca ✕ para otra partida, o ↩ para deshacer el último número.
+              </p>
+            )}
+          </div>
 
-                <div className="grid grid-cols-5 bg-gray-50 border-b border-gray-100">
-                  {COLS.map(l => (
-                    <div key={l} className="text-center py-1 text-xs font-black bebas tracking-wider"
-                      style={{ color: 'var(--primary)' }}>{l}</div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-5 gap-1 p-2 sm:gap-1.5 sm:p-2.5">
-                  {card.numbers.map((row, r) => row.map((n, c) => {
-                    const free = n === null
-                    const marked = mk[r][c]
-                    const cellRainbow = marked && rainbow
+          {/* Called balls */}
+          <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+            <p className="text-xs font-bold text-gray-400 tracking-wider uppercase">
+              Cantados — {called.length} / 75
+            </p>
+            <div ref={ballsRef}
+              className="flex gap-2 overflow-x-auto py-3 px-2 -mx-2 lg:flex-wrap lg:overflow-visible no-scrollbar">
+              {called.length === 0
+                ? <span className="text-gray-300 text-sm py-2 px-1 italic">Aún sin números…</span>
+                : called.map((n, i) => {
+                    const isLast = i === called.length - 1
                     return (
-                      <button key={`${r}${c}`} onClick={() => toggleCell(card.id, r, c)} disabled={free}
-                        className={`bingo-cell aspect-square rounded-lg flex items-center justify-center font-bold
-                          ${marked && !free ? 'marked' : ''} ${cellRainbow ? 'is-rainbow' : ''}`}
+                      <div key={n}
+                        className={`flex-shrink-0 w-11 h-11 rounded-full flex flex-col items-center justify-center
+                          leading-none transition-all duration-300 ball-pop ${isLast && rainbow ? 'is-rainbow' : ''}`}
                         style={{
-                          background: marked && !rainbow ? 'var(--primary)' : marked && rainbow ? undefined : '#f3f4f6',
-                          color: marked ? '#fff' : '#374151',
-                          cursor: free ? 'default' : 'pointer',
-                          fontSize: 'clamp(0.6rem, 2.5vw, 0.8rem)',
-                          boxShadow: marked && !free && !rainbow ? '0 2px 8px var(--primary-a35)' : 'none',
+                          background: isLast && !rainbow ? 'var(--primary)' : isLast ? undefined : '#f3f4f6',
+                          color: isLast ? '#fff' : '#4b5563',
+                          transform: isLast ? 'scale(1.12)' : 'scale(1)',
+                          boxShadow: isLast && !rainbow ? '0 3px 12px var(--primary-a35)' : 'none',
                         }}>
-                        {free ? '★' : n}
-                      </button>
+                        <span className="text-[9px] font-black opacity-70">{letterOf(n)}</span>
+                        <span className="bebas text-lg">{n}</span>
+                      </div>
                     )
-                  })).flat()}
-                </div>
+                  })}
+            </div>
+          </div>
+        </aside>
 
-                {near.length > 0 && (
-                  <div className="px-3 pb-2.5 -mt-0.5 flex flex-wrap gap-1">
+        <main className="min-w-0 mt-3 sm:mt-4 lg:mt-0 space-y-3 sm:space-y-4">
+
+          {/* Card filter */}
+          <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-2 gap-2">
+              <p className="text-xs font-bold text-gray-400 tracking-wider uppercase">Filtrar cartones</p>
+              <span className="text-xs font-semibold text-gray-400">{shownIdx.length} de {cards.length}</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1 bg-gray-100 rounded-xl p-1">
+              {[[0, 'Sin filtro'], [1, 'Falta 1 o menos'], [2, 'Faltan 2 o menos'], [3, 'Faltan 3 o menos']].map(([n, label]) => (
+                <button key={n} onClick={() => setFilterN(n)}
+                  className={`py-2 rounded-lg text-xs font-bold transition-all duration-200 active:scale-95
+                    ${filterN === n ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+                  style={filterN === n ? { color: 'var(--primary)' } : undefined}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {filterN > 0 && (
+              <p className="text-[11px] text-gray-400 mt-2">
+                {shownIdx.length
+                  ? 'Ordenados del más cerca al más lejos del próximo premio pendiente.'
+                  : 'Ningún cartón está tan cerca de un premio pendiente todavía.'}
+              </p>
+            )}
+          </div>
+
+          {/* Cards */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+            {shownIdx.map((ci, order) => {
+              const card = cards[ci]
+              const mk = marks[ci]
+              const wonPrizes = prizes.filter(p => awards[p.id]?.cardIds.includes(card.id))
+              const hasBadge = wonPrizes.length > 0
+              const near = prizes
+                .filter(p => !awards[p.id])
+                .map(p => ({ p, m: missing(p, mk) }))
+                .filter(x => x.m > 0 && x.m <= chipN)
+              return (
+                <div key={card.id} className="bg-white rounded-2xl overflow-hidden transition-shadow duration-500 card-enter"
+                  style={{
+                    animationDelay: `${Math.min(order, 8) * 40}ms`,
+                    boxShadow: hasBadge
+                      ? '0 0 0 3px var(--primary), 0 6px 24px var(--primary-a35)'
+                      : '0 1px 4px rgba(0,0,0,0.08)',
+                  }}>
+                  <div className={`px-3 py-2.5 flex items-center gap-2 transition-colors duration-500
+                    ${hasBadge && rainbow ? 'is-rainbow' : ''}`}
+                    style={{
+                      background: hasBadge && !rainbow ? 'var(--primary)' : hasBadge && rainbow ? undefined : '#f9fafb',
+                      borderBottom: '1px solid #e5e7eb',
+                    }}>
+                    <span className={`bebas tracking-wider text-sm flex-1 ${hasBadge ? 'text-white' : 'text-gray-700'}`}>
+                      Cartón #{ci + 1}
+                    </span>
+                    <div className="flex items-center gap-1 flex-wrap justify-end">
+                      {wonPrizes.map(p => (
+                        <span key={p.id} className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/25 text-white"
+                          title={p.name}>{PRIZE_EMOJI[p.type]} {p.name}</span>
+                      ))}
+                      {!hasBadge && (
+                        <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Jugando</span>
+                      )}
+                      {!gameOver && (
+                        <button onClick={() => openEdit(card)} title="Corregir números" aria-label="Corregir números"
+                          className={`w-7 h-7 rounded-full text-xs flex items-center justify-center active:scale-90 transition-transform
+                            ${hasBadge ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>✎</button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-5 bg-gray-50 border-b border-gray-100">
+                    {COLS.map(l => (
+                      <div key={l} className="text-center py-1 text-xs font-black bebas tracking-wider"
+                        style={{ color: 'var(--primary)' }}>{l}</div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-1 p-2 sm:gap-1.5 sm:p-2.5">
+                    {card.numbers.map((row, r) => row.map((n, c) => {
+                      const free = n === null
+                      const marked = mk[r][c]
+                      const cellRainbow = marked && rainbow
+                      return (
+                        <button key={`${r}${c}`} onClick={() => toggleCell(card.id, r, c)} disabled={free}
+                          className={`bingo-cell aspect-square rounded-lg flex items-center justify-center font-bold
+                            ${marked && !free ? 'marked' : ''} ${cellRainbow ? 'is-rainbow' : ''}`}
+                          style={{
+                            background: marked && !rainbow ? 'var(--primary)' : marked && rainbow ? undefined : '#f3f4f6',
+                            color: marked ? '#fff' : '#374151',
+                            cursor: free ? 'default' : 'pointer',
+                            fontSize: 'clamp(0.7rem, 2.8vw, 0.9rem)',
+                            boxShadow: marked && !free && !rainbow ? '0 2px 8px var(--primary-a35)' : 'none',
+                          }}>
+                          {free ? '★' : n}
+                        </button>
+                      )
+                    })).flat()}
+                  </div>
+
+                  <div className={`px-3 flex flex-wrap gap-1 transition-all duration-300 ${near.length ? 'pb-2.5 -mt-0.5' : 'h-0 overflow-hidden'}`}>
                     {near.map(({ p, m }) => (
                       <span key={p.id} className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
                         {p.name}: {m === 1 ? 'falta 1' : `faltan ${m}`}
                       </span>
                     ))}
                   </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+                </div>
+              )
+            })}
+          </div>
+        </main>
       </div>
     </div>
   )
