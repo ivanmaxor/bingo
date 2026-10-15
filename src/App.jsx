@@ -1,4 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import {
+  COLS, FREE, mkGrid, emptyForm, noManual, emptyPat,
+  FIGURE_PRESETS, patFromPreset, PRIZE_EMOJI, defaultPrizes,
+  cardMarked, formToNumbers, numbersToForm, sameNumbers, analyzeForm,
+  missing, evaluate, winMessage, parseCardsText, AI_PROMPT,
+} from './logic'
 
 // ── External libs ─────────────────────────────────────────────────────────────
 
@@ -26,78 +32,29 @@ function playWinSound() {
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.45)
       o.start(t); o.stop(t + 0.45)
     })
-  } catch (_) {}
+  } catch { /* audio not available */ }
 }
 
-// ── Grid helpers ──────────────────────────────────────────────────────────────
+// ── Persistence ───────────────────────────────────────────────────────────────
 
-const COLS     = ['B', 'I', 'N', 'G', 'O']
-const isFree   = (r, c) => r === 2 && c === 2
-const mkGrid   = fill => Array.from({ length: 5 }, (_, r) => Array.from({ length: 5 }, (_, c) => fill(r, c)))
-const mkMarked = () => mkGrid((r, c) => isFree(r, c))
-const mkEmpty  = () => Array.from({ length: 5 }, () => Array.from({ length: 5 }, () => ''))
+const STORE_KEY = 'bingo-v2'
 
-// ── Figure presets ────────────────────────────────────────────────────────────
-
-const FIGURE_PRESETS = {
-  L:    (r, c) => c === 0 || (r === 4 && c <= 1),
-  T:    (r, c) => r === 0 || c === 2,
-  X:    (r, c) => r === c || r + c === 4,
-  Z:    (r, c) => r === 0 || r === 4 || (r === 1 && c === 3) || (r === 3 && c === 1),
-  U:    (r, c) => c === 0 || c === 4 || r === 4,
-  Cruz: (r, c) => r === 2 || c === 2,
-}
-const mkFigure = fn => mkGrid((r, c) => fn(r, c) || isFree(r, c))
-
-// ── Win checks ────────────────────────────────────────────────────────────────
-
-function checkLine(m) {
-  for (let i = 0; i < 5; i++) {
-    if (m[i].every(Boolean)) return true
-    if (m.every(row => row[i])) return true
-  }
-  return [0,1,2,3,4].every(i => m[i][i]) || [0,1,2,3,4].every(i => m[i][4-i])
-}
-const checkFigure = (m, pat) => pat.every((row, r) => row.every((v, c) => !v || m[r][c]))
-const checkFull   = m => m.every(row => row.every(Boolean))
-
-function stageCheck(s, marked, pat) {
-  if (s === 1) return checkLine(marked)
-  if (s === 2) return checkFigure(marked, pat)
-  return checkFull(marked)
+function loadSaved() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY))
+    if (!s || typeof s !== 'object') return {}
+    const okGrid = g => Array.isArray(g) && g.length === 5 && g.every(r => Array.isArray(r) && r.length === 5)
+    if (!Array.isArray(s.cards) || !s.cards.every(c => okGrid(c?.numbers) && okGrid(c?.manual))) s.cards = []
+    if (!Array.isArray(s.prizes) || !s.prizes.length) s.prizes = null
+    if (!Array.isArray(s.called)) s.called = []
+    if (!s.awards || typeof s.awards !== 'object') s.awards = {}
+    return s
+  } catch { return {} }
 }
 
-// ── Stage metadata ────────────────────────────────────────────────────────────
-//
-//  Stage 1 → Línea       (any row / col / diagonal)   — game continues
-//  Stage 2 → Figura      (custom figure)              — game continues
-//  Stage 3 → Cartón Lleno (every cell filled)         — game ends
+const S = loadSaved()
 
-const STAGES = {
-  1: { badge: 'line',   label: 'LÍNEA',       emoji: '🥇', name: 'Línea' },
-  2: { badge: 'figure', label: 'FIGURA',       emoji: '🥈', name: 'Figura' },
-  3: { badge: 'full',   label: 'CARTÓN LLENO', emoji: '🏆', name: 'Cartón Lleno' },
-}
-
-// Evaluates stages in order starting from startStage, chaining if possible.
-function evaluateStages(cards, startStage, pat) {
-  let cur = cards
-  let s   = startStage
-  const resolutions = []
-
-  while (s <= 3) {
-    const { badge } = STAGES[s]
-    const winners = cur.filter(c => !c.badges.includes(badge) && stageCheck(s, c.marked, pat))
-    if (!winners.length) break
-    cur = cur.map(c =>
-      winners.some(w => w.id === c.id) ? { ...c, badges: [...c.badges, badge] } : c
-    )
-    resolutions.push({ stageNum: s, winners })
-    s++
-  }
-
-  return { cards: cur, resolutions, nextStage: s }
-}
+const newId = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
 
 // ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -107,12 +64,9 @@ const COLOR_PRESETS = [
   '#D97706','#EA580C','#DC2626','#DB2777','#C026D3','#374151',
 ]
 
-function hexToRgbParts(hex) {
-  const v = hex.replace('#', '')
-  return [parseInt(v.slice(0,2),16), parseInt(v.slice(2,4),16), parseInt(v.slice(4,6),16)]
-}
 function syncCssColor(hex) {
-  const [R, G, B] = hexToRgbParts(hex)
+  const v = hex.replace('#', '')
+  const [R, G, B] = [0, 2, 4].map(i => parseInt(v.slice(i, i + 2), 16))
   const d = document.documentElement.style
   d.setProperty('--primary',      `rgb(${R},${G},${B})`)
   d.setProperty('--primary-a35',  `rgba(${R},${G},${B},0.35)`)
@@ -122,69 +76,177 @@ function syncCssColor(hex) {
 
 // ── Shared sub-components ─────────────────────────────────────────────────────
 
-function Section({ title, children }) {
+function Section({ title, children, right }) {
   return (
     <div className="bg-white rounded-2xl p-4 sm:p-5 shadow-sm">
       {title && (
-        <p className="font-bold text-gray-500 mb-3 text-xs uppercase tracking-wider">{title}</p>
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <p className="font-bold text-gray-500 text-xs uppercase tracking-wider">{title}</p>
+          {right}
+        </div>
       )}
       {children}
     </div>
   )
 }
 
-// 5×5 input grid — cells are touch-friendly and prevent iOS-zoom (font ≥ 16 px)
-function CardFormGrid({ form, onChange, onSubmit }) {
+function ErrorBox({ children }) {
+  return (
+    <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-red-600 text-sm font-medium">
+      {children}
+    </div>
+  )
+}
+
+const CELL_BORDER = { free: 'var(--primary)', ok: 'var(--primary)', warn: '#f59e0b', err: '#ef4444' }
+
+const sanitizeCell = raw => {
+  const v = raw.trim()
+  if (/^[*★]$/.test(v) || (/[*★]/.test(v) && !/\d/.test(v))) return FREE
+  return v.replace(/\D/g, '').slice(0, 2)
+}
+
+// 5×5 input grid. A "*" cell is a free space. In freeMode, tapping a cell toggles it free.
+function CardFormGrid({ form, onChange, onSubmit, freeMode = false, status }) {
+  const st = status || analyzeForm(form).st
   return (
     <div className="overflow-x-auto -mx-1 px-1">
       <div className="inline-block min-w-full">
-        {/* Column headers */}
         <div className="grid grid-cols-5 gap-1 mb-1">
           {COLS.map(l => (
-            <div key={l}
-              className="w-12 sm:w-14 text-center text-sm font-black bebas tracking-wider"
-              style={{ color: 'var(--primary)' }}>
-              {l}
-            </div>
+            <div key={l} className="w-12 sm:w-14 text-center text-sm font-black bebas tracking-wider"
+              style={{ color: 'var(--primary)' }}>{l}</div>
           ))}
         </div>
-        {/* Input cells */}
         <div className="grid grid-cols-5 gap-1">
-          {mkGrid((r, c) =>
-            isFree(r, c)
-              ? <div key={`${r}${c}`}
-                  className="w-12 sm:w-14 h-11 sm:h-12 rounded-xl flex items-center justify-center
-                    text-white font-black bebas tracking-widest text-xs sm:text-sm"
+          {mkGrid((r, c) => {
+            const v = form[r][c]
+            const base = 'w-12 sm:w-14 h-11 sm:h-12 rounded-xl'
+            if (v === FREE) {
+              return (
+                <button key={`${r}${c}`} type="button" onClick={() => onChange(r, c, '')}
+                  title="Espacio libre (toca para convertirlo en número)"
+                  className={`${base} flex items-center justify-center text-white font-black bebas tracking-widest text-xs sm:text-sm`}
                   style={{ background: 'var(--primary)' }}>
                   FREE
-                </div>
-              : <input key={`${r}${c}`} type="number" min="1" max="75"
-                  value={form[r][c]}
-                  onChange={e => onChange(r, c, e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && onSubmit?.()}
-                  // text-base keeps font ≥ 16px, preventing iOS auto-zoom on focus
-                  className="w-12 sm:w-14 h-11 sm:h-12 rounded-xl border-2 text-center
-                    font-bold text-base focus:outline-none transition-colors"
-                  style={{ borderColor: form[r][c] ? 'var(--primary)' : '#e5e7eb' }}
-                  placeholder="—"
-                  inputMode="numeric" />
-          )}
+                </button>
+              )
+            }
+            if (freeMode) {
+              return (
+                <button key={`${r}${c}`} type="button" onClick={() => onChange(r, c, FREE)}
+                  className={`${base} border-2 border-dashed font-bold text-base text-gray-500 bg-gray-50`}
+                  style={{ borderColor: '#9ca3af' }}>
+                  {v || '—'}
+                </button>
+              )
+            }
+            const s = st[r][c]
+            return (
+              <input key={`${r}${c}`} type="text" inputMode="numeric" maxLength={2}
+                value={v}
+                onChange={e => onChange(r, c, sanitizeCell(e.target.value))}
+                onKeyDown={e => e.key === 'Enter' && onSubmit?.()}
+                className={`${base} border-2 text-center font-bold text-base focus:outline-none transition-colors`}
+                style={{
+                  borderColor: v ? CELL_BORDER[s] : '#e5e7eb',
+                  background: s === 'err' && v ? '#fef2f2' : s === 'warn' ? '#fffbeb' : undefined,
+                }}
+                placeholder="—" />
+            )
+          }).flat()}
         </div>
       </div>
     </div>
   )
 }
 
+function FreeModeToggle({ on, onToggle }) {
+  return (
+    <button type="button" onClick={onToggle}
+      className={`mb-3 px-3 py-1.5 rounded-lg text-xs font-bold border-2 transition-all active:scale-95
+        ${on ? 'text-white border-transparent' : 'border-gray-200 text-gray-500'}`}
+      style={on ? { background: 'var(--primary)' } : undefined}>
+      ★ Marcar espacios libres{on ? ' (activo: toca las casillas)' : ''}
+    </button>
+  )
+}
+
 // 30×30 px dot preview for figure preset buttons
-function MiniPattern({ fn }) {
+function MiniPattern({ pattern }) {
   return (
     <div className="grid grid-cols-5 gap-px" style={{ width: 30, height: 30 }}>
       {mkGrid((r, c) => (
-        <div key={`${r}${c}`} className="rounded-sm" style={{
-          background: fn(r,c)||isFree(r,c) ? 'var(--primary)' : '#d1d5db',
-          opacity:    isFree(r,c) ? 0.55 : 1,
-        }} />
-      ))}
+        <div key={`${r}${c}`} className="rounded-sm"
+          style={{ background: pattern[r][c] ? 'var(--primary)' : '#d1d5db' }} />
+      )).flat()}
+    </div>
+  )
+}
+
+function PatternEditor({ pattern, onChange }) {
+  const toggle = (r, c) => onChange(pattern.map((row, ri) => row.map((v, ci) => (ri === r && ci === c ? !v : v))))
+  return (
+    <div className="inline-block">
+      <div className="grid grid-cols-5 gap-1 mb-1">
+        {COLS.map(l => (
+          <div key={l} className="w-11 text-center text-xs font-black bebas tracking-wider"
+            style={{ color: 'var(--primary)' }}>{l}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-5 gap-1">
+        {mkGrid((r, c) => (
+          <button key={`${r}${c}`} type="button" onClick={() => toggle(r, c)}
+            className="bingo-cell w-11 h-11 rounded-xl text-sm font-bold"
+            style={{
+              background: pattern[r][c] ? 'var(--primary)' : '#e5e7eb',
+              color:      pattern[r][c] ? '#fff' : '#9ca3af',
+              boxShadow:  pattern[r][c] ? '0 2px 8px var(--primary-a35)' : 'none',
+              transform:  pattern[r][c] ? 'scale(1.07)' : 'scale(1)',
+            }}>
+            {pattern[r][c] ? '✓' : (r === 2 && c === 2 ? '★' : '·')}
+          </button>
+        )).flat()}
+      </div>
+    </div>
+  )
+}
+
+// Add / edit one card in a bottom-sheet modal.
+function CardModal({ title, form, setForm, error, onSave, onClose, onDelete, note, saveLabel }) {
+  const [freeMode, setFreeMode] = useState(false)
+  const update = (r, c, v) => setForm(f => f.map((row, ri) => row.map((x, ci) => (ri === r && ci === c ? v : x))))
+  return (
+    <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center"
+      style={{ background: 'rgba(0,0,0,0.55)' }}
+      onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm p-5 sm:p-6 max-h-[92vh] overflow-y-auto">
+        <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-bold text-gray-800">{title}</h2>
+          <button onClick={onClose}
+            className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500
+              flex items-center justify-center font-bold text-lg leading-none transition-colors">×</button>
+        </div>
+        {error && <ErrorBox>{error}</ErrorBox>}
+        <FreeModeToggle on={freeMode} onToggle={() => setFreeMode(m => !m)} />
+        <CardFormGrid form={form} onChange={update} onSubmit={onSave} freeMode={freeMode} />
+        {note && <p className="text-xs text-gray-400 mt-2">{note}</p>}
+        <div className="flex gap-2 mt-4">
+          {onDelete && (
+            <button onClick={onDelete}
+              className="px-4 py-3 rounded-xl border-2 border-red-200 text-red-500 font-bold text-sm
+                hover:bg-red-50 active:scale-95 transition-all">Eliminar</button>
+          )}
+          <button onClick={onClose}
+            className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-500 font-bold text-sm
+              hover:border-gray-300 active:scale-95 transition-all">Cancelar</button>
+          <button onClick={onSave}
+            className="flex-1 py-3 rounded-xl text-white font-bold text-sm hover:opacity-90
+              active:scale-95 transition-all shadow-md"
+            style={{ background: 'var(--primary)' }}>{saveLabel}</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -192,416 +254,534 @@ function MiniPattern({ fn }) {
 // ── Main App ──────────────────────────────────────────────────────────────────
 
 export default function App() {
-  // ─ Shared config ─
-  const [screen,  setScreen]  = useState('config')
-  const [color,   setColor]   = useState('#7C3AED')
-  const [rainbow, setRainbow] = useState(false)
-  const [pat,     setPat]     = useState(() => mkFigure(FIGURE_PRESETS.Cruz))
+  const [color,   setColor]   = useState(S.color || '#7C3AED')
+  const [rainbow, setRainbow] = useState(!!S.rainbow)
+  const [prizes,  setPrizes]  = useState(S.prizes || defaultPrizes())
+  const [cards,   setCards]   = useState(S.cards || [])
+  const [started, setStarted] = useState(!!S.started && (S.cards || []).length > 0)
+  const [called,  setCalled]  = useState(S.called || [])
+  const [awards,  setAwards]  = useState(S.awards || {})
 
-  // ─ Config card builder ─
-  const [form,      setForm]      = useState(mkEmpty)
-  const [cards,     setCards]     = useState([])
-  const [cardError, setCardError] = useState('')
+  // Config: manual add + import
+  const [form,       setForm]       = useState(emptyForm)
+  const [freeMode,   setFreeMode]   = useState(false)
+  const [cardError,  setCardError]  = useState('')
+  const [importText, setImportText] = useState('')
+  const [drafts,     setDrafts]     = useState([])
+  const [importMsg,  setImportMsg]  = useState('')
+  const [copied,     setCopied]     = useState(false)
+  const [startError, setStartError] = useState('')
 
-  // ─ Game ─
-  const [gameCards, setGameCards] = useState([])
-  const [called,    setCalled]    = useState([])
-  const [stage,     setStage]     = useState(1)
-  const [gameOver,  setGameOver]  = useState(false)
+  // Game
   const [numInput,  setNumInput]  = useState('')
   const [gameError, setGameError] = useState('')
   const [toast,     setToast]     = useState(null)
 
-  // ─ Mid-game add-card modal ─
-  const [modalOpen,  setModalOpen]  = useState(false)
-  const [modalForm,  setModalForm]  = useState(mkEmpty)
+  // Card modal: { mode: 'add' | 'edit', id? }
+  const [modal,      setModal]      = useState(null)
+  const [modalForm,  setModalForm]  = useState(emptyForm)
   const [modalError, setModalError] = useState('')
 
-  const inputRef    = useRef(null)
-  const ballsRef    = useRef(null)
-  const toastTimer  = useRef(null)
+  const inputRef   = useRef(null)
+  const ballsRef   = useRef(null)
+  const toastTimer = useRef([])
 
   useEffect(() => { syncCssColor(color) }, [color])
   useEffect(() => { loadConfetti() }, [])
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({ color, rainbow, prizes, cards, started, called, awards }))
+    } catch { /* storage full or blocked */ }
+  }, [color, rainbow, prizes, cards, started, called, awards])
 
-  // ── Config handlers ───────────────────────────────────────────────────────
+  const gameOver = started && prizes.length > 0 && prizes.every(p => awards[p.id])
 
-  const togglePat = (r, c) => {
-    if (isFree(r, c)) return
-    setPat(p => p.map((row, ri) => row.map((v, ci) => ri===r&&ci===c ? !v : v)))
-  }
+  // ── Prize editor ──────────────────────────────────────────────────────────
 
-  const updateForm = (r, c, val) =>
-    setForm(f => f.map((row, ri) => row.map((v, ci) => ri===r&&ci===c ? val : v)))
+  const patchPrize = (id, patch) => setPrizes(ps => ps.map(p => (p.id === id ? { ...p, ...patch } : p)))
+  const movePrize = (i, d) => setPrizes(ps => {
+    const j = i + d
+    if (j < 0 || j >= ps.length) return ps
+    const n = [...ps]; [n[i], n[j]] = [n[j], n[i]]; return n
+  })
+  const addPrize = type => setPrizes(ps => [...ps, {
+    id: newId(), type,
+    name: type === 'line' ? 'Línea' : type === 'full' ? 'Cartón lleno' : 'Mi figura',
+    ...(type === 'line' ? { dirs: 'any' } : {}),
+    ...(type === 'figure' ? { pattern: emptyPat() } : {}),
+  }])
 
-  function validateCardForm(f) {
-    const nums = []
-    for (let r = 0; r < 5; r++) for (let c = 0; c < 5; c++) {
-      if (isFree(r, c)) continue
-      const n = parseInt(f[r][c])
-      if (isNaN(n) || n < 1 || n > 75) return 'Todos los números deben ser entre 1 y 75'
-      nums.push(n)
-    }
-    if (new Set(nums).size < nums.length) return 'No puede haber números repetidos'
-    return null
-  }
+  // ── Add cards (manual / import) ───────────────────────────────────────────
+
+  const makeCard = f => ({ id: newId(), numbers: formToNumbers(f), manual: noManual() })
+
+  const updateForm = (r, c, v) =>
+    setForm(f => f.map((row, ri) => row.map((x, ci) => (ri === r && ci === c ? v : x))))
 
   const addCard = () => {
-    const err = validateCardForm(form)
-    if (err) { setCardError(err); return }
+    const a = analyzeForm(form)
+    if (!a.valid) { setCardError(a.errors.join(' · ')); return }
     setCardError('')
-    setCards(prev => [...prev, {
-      id: Date.now(),
-      numbers: mkGrid((r, c) => isFree(r,c) ? null : parseInt(form[r][c])),
-    }])
-    setForm(mkEmpty())
+    setCards(prev => [...prev, makeCard(form)])
+    setForm(emptyForm())
   }
+
+  const readImport = () => {
+    const parsed = parseCardsText(importText)
+    if (!parsed.length) { setImportMsg('No encontré ningún cartón en el texto.'); setDrafts([]); return }
+    setImportMsg('')
+    setDrafts(parsed.map(p => ({ key: newId(), form: p.form, note: p.note })))
+  }
+
+  const updateDraft = (key, r, c, v) =>
+    setDrafts(ds => ds.map(d => d.key !== key ? d : {
+      ...d, form: d.form.map((row, ri) => row.map((x, ci) => (ri === r && ci === c ? v : x))),
+    }))
+  const removeDraft = key => setDrafts(ds => ds.filter(d => d.key !== key))
+
+  const draftInfo = (d, i) => {
+    const a = analyzeForm(d.form)
+    const nums = formToNumbers(d.form)
+    const dupExisting = a.valid && cards.some(c => sameNumbers(c.numbers, nums))
+    const dupDraft = a.valid && drafts.some((o, j) => j < i && analyzeForm(o.form).valid && sameNumbers(formToNumbers(o.form), nums))
+    return { ...a, dupExisting, dupDraft }
+  }
+
+  const confirmDrafts = keys => {
+    const toAdd = drafts.filter(d => keys.includes(d.key) && analyzeForm(d.form).valid)
+    if (!toAdd.length) return
+    setCards(prev => [...prev, ...toAdd.map(d => makeCard(d.form))])
+    setDrafts(ds => ds.filter(d => !toAdd.some(a => a.key === d.key)))
+    if (toAdd.length === drafts.length) setImportText('')
+  }
+
+  const copyPrompt = async () => {
+    try { await navigator.clipboard.writeText(AI_PROMPT) } catch {
+      const t = document.createElement('textarea'); t.value = AI_PROMPT
+      document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
+    }
+    setCopied(true); setTimeout(() => setCopied(false), 2000)
+  }
+
+  // ── Start / reset ─────────────────────────────────────────────────────────
 
   const startGame = () => {
-    setGameCards(cards.map((card, i) => ({
-      ...card, idx: i+1, marked: mkMarked(), badges: [],
-    })))
-    setCalled([]); setNumInput(''); setStage(1); setGameOver(false)
-    setToast(null); setGameError('')
-    setScreen('game')
+    if (!cards.length) return
+    if (!prizes.length) { setStartError('Agrega al menos un premio'); return }
+    const bad = prizes.find(p => p.type === 'figure' && !p.pattern.flat().some(Boolean))
+    if (bad) { setStartError(`La figura «${bad.name}» no tiene casillas marcadas`); return }
+    setStartError('')
+    setCards(cs => cs.map(c => ({ ...c, manual: noManual() })))
+    setCalled([]); setAwards({}); setNumInput(''); setGameError(''); setToast(null)
+    setStarted(true)
   }
 
-  // ── Stage-win announcement ────────────────────────────────────────────────
+  const clearToasts = () => { toastTimer.current.forEach(clearTimeout); toastTimer.current = []; setToast(null) }
 
-  const fireStageWin = useCallback((stageNum, winners) => {
-    const { emoji, label } = STAGES[stageNum]
-    const list = winners.map(w => w.idx).join(', #')
-    setToast({
-      msg: `${emoji} ¡${label}!\nCartón${winners.length > 1 ? 'es' : ''} #${list}`,
-      stageNum,
+  const backToConfig = () => {
+    clearToasts()
+    setStarted(false); setCalled([]); setAwards({}); setNumInput(''); setGameError('')
+    setCards(cs => cs.map(c => ({ ...c, manual: noManual() })))
+  }
+
+  const clearAllCards = () => {
+    if (cards.length && !window.confirm(`¿Borrar los ${cards.length} cartones?`)) return
+    setCards([])
+  }
+
+  // ── Announcements ─────────────────────────────────────────────────────────
+
+  const announce = useCallback((freshIds, newAwards, cardsNow, calledNow) => {
+    toastTimer.current.forEach(clearTimeout); toastTimer.current = []
+    freshIds.forEach((id, i) => {
+      const p = prizes.find(x => x.id === id)
+      if (!p) return
+      const msg = winMessage(p, newAwards[id].cardIds, cardsNow, calledNow)
+      toastTimer.current.push(setTimeout(() => {
+        setToast({ msg })
+        playWinSound()
+        loadConfetti().then(f => f && f({ particleCount: 230, spread: 110, origin: { y: 0.55 } }))
+      }, i * 4200))
     })
-    playWinSound()
-    loadConfetti().then(f => f && f({ particleCount: 230, spread: 110, origin: { y: 0.55 } }))
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-    toastTimer.current = setTimeout(() => setToast(null), 3200)
-  }, [])
+    if (freshIds.length) {
+      toastTimer.current.push(setTimeout(() => setToast(null), (freshIds.length - 1) * 4200 + 4000))
+    }
+  }, [prizes])
 
-  // ── Game: call number ─────────────────────────────────────────────────────
+  // Re-evaluates prizes after any change and announces new ones.
+  const commit = useCallback((nextCards, nextCalled, baseAwards, viaCall = false) => {
+    const { awards: na, fresh } = evaluate(nextCards, nextCalled, baseAwards, prizes, viaCall)
+    setCards(nextCards); setCalled(nextCalled); setAwards(na)
+    announce(fresh, na, nextCards, nextCalled)
+  }, [prizes, announce])
 
-  const callNum = useCallback(() => {
+  // ── Game actions ──────────────────────────────────────────────────────────
+
+  const callNum = () => {
     if (gameOver) return
-    const n = parseInt(numInput)
+    const n = parseInt(numInput, 10)
     if (isNaN(n) || n < 1 || n > 75) { setGameError('Número entre 1 y 75'); return }
     if (called.includes(n))           { setGameError('Ya fue cantado'); return }
-    setGameError('')
-
-    const newCalled = [...called, n]
-    setCalled(newCalled)
-    setNumInput('')
-
-    const markedCards = gameCards.map(card => ({
-      ...card,
-      marked: card.marked.map((row, r) =>
-        row.map((v, c) => isFree(r,c) ? true : v || card.numbers[r][c] === n)
-      ),
-    }))
-
-    const { cards: finalCards, resolutions, nextStage } = evaluateStages(markedCards, stage, pat)
-    setGameCards(finalCards)
-
-    if (resolutions.length > 0) {
-      setStage(Math.min(nextStage, 3))
-      if (nextStage > 3) setGameOver(true)
-      resolutions.forEach(({ stageNum, winners }, i) => {
-        setTimeout(() => fireStageWin(stageNum, winners), i * 3500)
-      })
-    }
-
+    setGameError(''); setNumInput('')
+    commit(cards, [...called, n], awards, true)
     setTimeout(() => {
       if (ballsRef.current) ballsRef.current.scrollLeft = ballsRef.current.scrollWidth
+      inputRef.current?.focus()
     }, 40)
-  }, [numInput, called, gameCards, stage, pat, gameOver, fireStageWin])
-
-  // ── Game: undo ────────────────────────────────────────────────────────────
+  }
 
   const undoLast = () => {
     if (!called.length) return
-    const newCalled = called.slice(0, -1)
-    setCalled(newCalled)
-    setToast(null)
-    if (toastTimer.current) clearTimeout(toastTimer.current)
-
-    const recalc = gameCards.map(card => ({
-      ...card,
-      badges: [],
-      marked: card.numbers.map((row, r) =>
-        row.map((v, c) => isFree(r,c) ? true : newCalled.includes(v))
-      ),
-    }))
-    const { cards: finalCards, nextStage } = evaluateStages(recalc, 1, pat)
-    setGameCards(finalCards)
-    setStage(Math.min(nextStage, 3))
-    setGameOver(nextStage > 3)
+    clearToasts()
+    const nc = called.slice(0, -1)
+    const kept = {}
+    for (const [k, v] of Object.entries(awards)) if (v.step <= nc.length) kept[k] = v
+    commit(cards, nc, kept)
   }
-
-  // ── Game: manual cell toggle ──────────────────────────────────────────────
 
   const toggleCell = (cardId, r, c) => {
-    if (isFree(r, c) || gameOver) return
-    setGameCards(prev => prev.map(card => {
-      if (card.id !== cardId) return card
-      return {
-        ...card,
-        marked: card.marked.map((row, ri) => row.map((v, ci) => ri===r&&ci===c ? !v : v)),
-      }
-    }))
+    if (gameOver) return
+    const next = cards.map(card => card.id !== cardId || card.numbers[r][c] === null ? card : {
+      ...card,
+      manual: card.manual.map((row, ri) => row.map((v, ci) => (ri === r && ci === c ? !v : v))),
+    })
+    commit(next, called, awards)
   }
 
-  // ── Game: add card via modal ──────────────────────────────────────────────
+  // ── Card modal ────────────────────────────────────────────────────────────
 
-  const addCardInGame = () => {
-    const err = validateCardForm(modalForm)
-    if (err) { setModalError(err); return }
-    setModalError('')
-    const preMarked = mkGrid((r, c) =>
-      isFree(r,c) ? true : called.includes(parseInt(modalForm[r][c]))
-    )
-    setGameCards(prev => [...prev, {
-      id:      Date.now(),
-      idx:     prev.length + 1,
-      numbers: mkGrid((r, c) => isFree(r,c) ? null : parseInt(modalForm[r][c])),
-      marked:  preMarked,
-      badges:  [],
-    }])
-    setModalForm(mkEmpty())
-    setModalOpen(false)
+  const openAdd = () => { setModalForm(emptyForm()); setModalError(''); setModal({ mode: 'add' }) }
+  const openEdit = card => {
+    setModalForm(numbersToForm(card.numbers)); setModalError(''); setModal({ mode: 'edit', id: card.id })
   }
 
-  const openModal = () => { setModalForm(mkEmpty()); setModalError(''); setModalOpen(true) }
-
-  const newGame = () => {
-    setScreen('config')
-    setCards([]); setCalled([]); setGameCards([])
-    setStage(1); setGameOver(false)
-    setNumInput(''); setToast(null); setGameError(''); setCardError('')
-    setForm(mkEmpty())
+  const saveModal = () => {
+    const a = analyzeForm(modalForm)
+    if (!a.valid) { setModalError(a.errors.join(' · ')); return }
+    const numbers = formToNumbers(modalForm)
+    const next = modal.mode === 'add'
+      ? [...cards, { id: newId(), numbers, manual: noManual() }]
+      : cards.map(c => (c.id === modal.id ? { ...c, numbers, manual: noManual() } : c))
+    if (started) commit(next, called, awards)
+    else setCards(next)
+    setModal(null)
   }
+
+  const deleteModal = () => {
+    if (!window.confirm('¿Eliminar este cartón?')) return
+    const next = cards.filter(c => c.id !== modal.id)
+    if (started) commit(next, called, awards)
+    else setCards(next)
+    setModal(null)
+  }
+
+  const cardModal = modal && (
+    <CardModal
+      title={modal.mode === 'add' ? 'Agregar cartón' : `Editar cartón #${cards.findIndex(c => c.id === modal.id) + 1}`}
+      form={modalForm} setForm={setModalForm} error={modalError}
+      onSave={saveModal} onClose={() => setModal(null)}
+      onDelete={modal.mode === 'edit' ? deleteModal : undefined}
+      saveLabel={modal.mode === 'add' ? '+ Agregar' : 'Guardar'}
+      note={started && called.length > 0
+        ? `${called.length} número(s) ya cantados se marcarán automáticamente.` : undefined}
+    />
+  )
 
   // ══════════════════════════════════════════════════════════════════════════
   //  CONFIG SCREEN
   // ══════════════════════════════════════════════════════════════════════════
 
-  if (screen === 'config') return (
-    <div className="min-h-screen bg-gray-50 pb-12">
+  if (!started) {
+    const draftValid = drafts.filter(d => analyzeForm(d.form).valid)
+    return (
+      <div className="min-h-screen bg-gray-50 pb-12">
+        {cardModal}
 
-      {/* Header */}
-      <header className={`text-white text-center py-8 sm:py-10 mb-5 shadow-xl ${rainbow ? 'is-rainbow' : ''}`}
-        style={{ background: rainbow ? undefined : 'var(--primary)' }}>
-        <h1 className="bebas text-6xl sm:text-7xl text-white select-none drop-shadow-lg"
-          style={{ letterSpacing: '0.35em' }}>
-          BINGO
-        </h1>
-        <p className="text-xs opacity-60 tracking-[0.2em] uppercase mt-1 font-medium">
-          Configuración de partida
-        </p>
-      </header>
+        <header className={`text-white text-center py-8 sm:py-10 mb-5 shadow-xl ${rainbow ? 'is-rainbow' : ''}`}
+          style={{ background: rainbow ? undefined : 'var(--primary)' }}>
+          <h1 className="bebas text-6xl sm:text-7xl text-white select-none drop-shadow-lg"
+            style={{ letterSpacing: '0.35em' }}>BINGO</h1>
+          <p className="text-xs opacity-60 tracking-[0.2em] uppercase mt-1 font-medium">
+            Configuración de partida
+          </p>
+        </header>
 
-      <div className="max-w-xl mx-auto px-3 sm:px-4 space-y-4">
+        <div className="max-w-xl mx-auto px-3 sm:px-4 space-y-4">
 
-        {/* ── Color picker ── */}
-        <Section title="Color primario">
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 flex-wrap">
-              {/* Native color picker trigger */}
-              <div className="relative cursor-pointer flex-shrink-0">
-                <input type="color" value={color}
-                  onChange={e => { setColor(e.target.value); setRainbow(false) }}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
-                <div className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 pointer-events-none
-                  font-mono text-sm font-bold select-none"
-                  style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }}>
-                  <span className="w-6 h-6 rounded-lg border border-black/10 shadow-sm flex-shrink-0"
-                    style={{ background: color }} />
-                  {color.toUpperCase()}
-                </div>
-              </div>
-              {/* Rainbow toggle */}
-              <button onClick={() => setRainbow(r => !r)}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm font-bold
-                  transition-all hover:scale-105 active:scale-95 select-none flex-shrink-0
-                  ${rainbow ? 'is-rainbow text-white border-transparent' : 'border-gray-200 text-gray-500'}`}>
-                🌈 Arcoíris{rainbow ? ' ✓' : ''}
-              </button>
-            </div>
-            {/* Color swatches — wrap naturally */}
-            <div className="flex flex-wrap gap-2">
-              {COLOR_PRESETS.map(c => (
-                <button key={c} onClick={() => { setColor(c); setRainbow(false) }}
-                  className="w-8 h-8 rounded-full transition-all hover:scale-110 active:scale-95 shadow-sm"
-                  style={{
-                    background:    c,
-                    outline:       !rainbow && c === color ? `3px solid ${c}` : 'none',
-                    outlineOffset: '2px',
-                  }} />
-              ))}
-            </div>
-          </div>
-        </Section>
-
-        {/* ── Stage info ── */}
-        <Section title="Etapas de la partida">
-          <div className="flex flex-col gap-2">
-            {[1, 2, 3].map(s => {
-              const { emoji, name } = STAGES[s]
-              const desc = s === 1 ? 'Primera fila, columna o diagonal completa.' :
-                           s === 2 ? 'Primera figura completa (configurable abajo).' :
-                                     'Primer cartón con todas las celdas marcadas. Fin de la partida.'
-              return (
-                <div key={s} className="flex items-start gap-3 p-3 rounded-xl bg-gray-50">
-                  <span className="text-xl flex-shrink-0">{emoji}</span>
-                  <div>
-                    <p className="text-sm font-bold text-gray-800">
-                      Etapa {s}: <span style={{ color: 'var(--primary)' }}>{name}</span>
-                    </p>
-                    <p className="text-xs text-gray-400 mt-0.5">{desc}</p>
+          {/* ── Color ── */}
+          <Section title="Color primario">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="relative cursor-pointer flex-shrink-0">
+                  <input type="color" value={color}
+                    onChange={e => { setColor(e.target.value); setRainbow(false) }}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl border-2 pointer-events-none
+                    font-mono text-sm font-bold select-none"
+                    style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }}>
+                    <span className="w-6 h-6 rounded-lg border border-black/10 shadow-sm flex-shrink-0"
+                      style={{ background: color }} />
+                    {color.toUpperCase()}
                   </div>
                 </div>
-              )
-            })}
-          </div>
-        </Section>
-
-        {/* ── Figure pattern (stage 2) ── */}
-        <Section title="Figura — Etapa 2">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-            Figuras predefinidas
-          </p>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {Object.entries(FIGURE_PRESETS).map(([name, fn]) => (
-              <button key={name} onClick={() => setPat(mkFigure(fn))}
-                className="flex flex-col items-center gap-1.5 px-3 pt-2.5 pb-2 rounded-xl border-2
-                  transition-all hover:shadow-md hover:scale-105 active:scale-95"
-                style={{ borderColor: 'var(--primary-a35)' }}>
-                <MiniPattern fn={fn} />
-                <span className="text-xs font-black bebas tracking-wider"
-                  style={{ color: 'var(--primary)' }}>
-                  {name}
-                </span>
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-gray-500 mb-2">
-            Toca para personalizar. <strong className="text-gray-700">★</strong> = FREE SPACE.
-          </p>
-          <div className="inline-block">
-            <div className="grid grid-cols-5 gap-1 mb-1">
-              {COLS.map(l => (
-                <div key={l} className="w-11 text-center text-xs font-black bebas tracking-wider"
-                  style={{ color: 'var(--primary)' }}>{l}</div>
-              ))}
-            </div>
-            <div className="grid grid-cols-5 gap-1">
-              {mkGrid((r, c) => (
-                <button key={`${r}${c}`} onClick={() => togglePat(r, c)}
-                  className="bingo-cell w-11 h-11 rounded-xl text-sm font-bold"
-                  style={{
-                    background: pat[r][c] ? 'var(--primary)' : '#e5e7eb',
-                    color:      pat[r][c] ? '#fff'            : '#9ca3af',
-                    cursor:     isFree(r,c) ? 'default' : 'pointer',
-                    boxShadow:  pat[r][c] ? '0 2px 8px var(--primary-a35)' : 'none',
-                    transform:  pat[r][c] && !isFree(r,c) ? 'scale(1.07)' : 'scale(1)',
-                  }}>
-                  {isFree(r,c) ? '★' : pat[r][c] ? '✓' : '·'}
+                <button onClick={() => setRainbow(r => !r)}
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 text-sm font-bold
+                    transition-all hover:scale-105 active:scale-95 select-none flex-shrink-0
+                    ${rainbow ? 'is-rainbow text-white border-transparent' : 'border-gray-200 text-gray-500'}`}>
+                  🌈 Arcoíris{rainbow ? ' ✓' : ''}
                 </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {COLOR_PRESETS.map(c => (
+                  <button key={c} onClick={() => { setColor(c); setRainbow(false) }}
+                    className="w-8 h-8 rounded-full transition-all hover:scale-110 active:scale-95 shadow-sm"
+                    style={{
+                      background: c,
+                      outline: !rainbow && c === color ? `3px solid ${c}` : 'none',
+                      outlineOffset: '2px',
+                    }} />
+                ))}
+              </div>
+            </div>
+          </Section>
+
+          {/* ── Prizes ── */}
+          <Section title="Premios de la partida">
+            <p className="text-xs text-gray-400 mb-3">
+              Cada premio se gana la primera vez que algún cartón lo completa, en cualquier orden.
+              Los espacios libres (★) de cada cartón cuentan como ya marcados.
+            </p>
+            <div className="space-y-3">
+              {prizes.map((p, i) => (
+                <div key={p.id} className="rounded-xl border-2 p-3" style={{ borderColor: 'var(--primary-a35)' }}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl flex-shrink-0">{PRIZE_EMOJI[p.type]}</span>
+                    <input type="text" value={p.name} maxLength={28}
+                      onChange={e => patchPrize(p.id, { name: e.target.value })}
+                      className="flex-1 min-w-0 h-10 px-3 rounded-lg border-2 border-gray-200 font-bold text-sm
+                        focus:outline-none" style={{ fontSize: 16 }} />
+                    <button onClick={() => movePrize(i, -1)} disabled={i === 0}
+                      className="w-8 h-8 rounded-lg bg-gray-100 text-gray-500 font-bold disabled:opacity-30">↑</button>
+                    <button onClick={() => movePrize(i, 1)} disabled={i === prizes.length - 1}
+                      className="w-8 h-8 rounded-lg bg-gray-100 text-gray-500 font-bold disabled:opacity-30">↓</button>
+                    <button onClick={() => setPrizes(ps => ps.filter(x => x.id !== p.id))}
+                      className="w-8 h-8 rounded-lg bg-red-50 text-red-500 font-bold">×</button>
+                  </div>
+
+                  {p.type === 'line' && (
+                    <div className="mt-2 flex gap-2 text-xs font-bold">
+                      {[['any', 'Fila, columna o diagonal'], ['rows', 'Solo filas']].map(([v, label]) => (
+                        <button key={v} onClick={() => patchPrize(p.id, { dirs: v })}
+                          className={`px-3 py-1.5 rounded-lg border-2 transition-all
+                            ${p.dirs === v ? 'text-white border-transparent' : 'border-gray-200 text-gray-500'}`}
+                          style={p.dirs === v ? { background: 'var(--primary)' } : undefined}>{label}</button>
+                      ))}
+                    </div>
+                  )}
+                  {p.type === 'full' && (
+                    <p className="text-xs text-gray-400 mt-2">Todas las casillas del cartón marcadas.</p>
+                  )}
+                  {p.type === 'figure' && (
+                    <div className="mt-3">
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {Object.keys(FIGURE_PRESETS).map(name => (
+                          <button key={name}
+                            onClick={() => patchPrize(p.id, { pattern: patFromPreset(name), name })}
+                            className="flex flex-col items-center gap-1 px-2.5 pt-2 pb-1.5 rounded-xl border-2
+                              transition-all hover:shadow-md active:scale-95"
+                            style={{ borderColor: 'var(--primary-a35)' }}>
+                            <MiniPattern pattern={patFromPreset(name)} />
+                            <span className="text-[10px] font-black bebas tracking-wider"
+                              style={{ color: 'var(--primary)' }}>{name}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-500 mb-2">Elige una figura o dibuja la tuya tocando las casillas.</p>
+                      <PatternEditor pattern={p.pattern} onChange={pattern => patchPrize(p.id, { pattern })} />
+                      <p className="text-xs text-gray-400 mt-2">
+                        {p.pattern.flat().filter(Boolean).length} casilla(s) seleccionada(s)
+                      </p>
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
-          </div>
-          <p className="text-xs text-gray-400 mt-2">
-            {pat.flat().filter(Boolean).length} celda(s) seleccionada(s)
-          </p>
-        </Section>
-
-        {/* ── Card builder ── */}
-        <Section title="Agregar cartón">
-          {cardError && (
-            <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200
-              text-red-600 text-sm font-medium">
-              {cardError}
-            </div>
-          )}
-          <CardFormGrid form={form} onChange={updateForm} onSubmit={addCard} />
-          <button onClick={addCard}
-            className="mt-4 w-full py-3 rounded-xl font-bold text-white text-sm
-              transition-all hover:opacity-90 active:scale-95 shadow-md"
-            style={{ background: 'var(--primary)' }}>
-            + Agregar cartón
-          </button>
-        </Section>
-
-        {/* ── Saved card thumbnails ── */}
-        {cards.length > 0 && (
-          <Section title={`Cartones (${cards.length})`}>
-            <div className="flex flex-wrap gap-3">
-              {cards.map((card, i) => (
-                <div key={card.id}
-                  className="relative border-2 rounded-xl p-2 transition-shadow hover:shadow-md"
-                  style={{ borderColor: 'var(--primary-a35)' }}>
-                  <p className="text-center text-xs font-black mb-1 bebas tracking-wider"
-                    style={{ color: 'var(--primary)' }}>
-                    #{i+1}
-                  </p>
-                  <div className="grid grid-cols-5 gap-px">
-                    {card.numbers.map((row, r) => row.map((n, c) => (
-                      <div key={`${r}${c}`}
-                        className="w-6 h-5 flex items-center justify-center rounded"
-                        style={{
-                          background: isFree(r,c) ? 'var(--primary)' : '#f3f4f6',
-                          color:      isFree(r,c) ? '#fff'             : '#374151',
-                          fontSize: '8px', fontWeight: 700,
-                        }}>
-                        {isFree(r,c) ? '★' : n}
-                      </div>
-                    )))}
-                  </div>
-                  <button onClick={() => setCards(prev => prev.filter(cc => cc.id !== card.id))}
-                    className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-500
-                      text-white font-bold flex items-center justify-center leading-none shadow-md
-                      hover:bg-red-600 transition-colors text-sm">
-                    ×
-                  </button>
-                </div>
+            <div className="flex flex-wrap gap-2 mt-3">
+              {[['line', '+ Línea'], ['figure', '+ Figura'], ['full', '+ Cartón lleno']].map(([t, label]) => (
+                <button key={t} onClick={() => addPrize(t)}
+                  className="px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all active:scale-95"
+                  style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }}>{label}</button>
               ))}
             </div>
           </Section>
-        )}
 
-        {/* ── Start button ── */}
-        <button onClick={startGame} disabled={cards.length === 0}
-          className="w-full py-4 rounded-2xl text-white shadow-lg transition-all
-            hover:shadow-xl hover:opacity-95 active:scale-95
-            disabled:opacity-40 disabled:cursor-not-allowed bebas tracking-widest"
-          style={{ background: 'var(--primary)', fontSize: '1.5rem' }}>
-          INICIAR PARTIDA →
-        </button>
-        {cards.length === 0 && (
-          <p className="text-center text-gray-400 text-xs -mt-2">
-            Agrega al menos un cartón para comenzar
-          </p>
-        )}
+          {/* ── Import ── */}
+          <Section title="Importar cartones desde texto">
+            <p className="text-xs text-gray-500 mb-3">
+              Pásale las fotos de tus cartones (máx. 10 por vez) a una IA con el prompt de abajo, pega aquí su
+              respuesta y revisa cada cartón antes de agregarlo.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button onClick={copyPrompt}
+                className="px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all active:scale-95"
+                style={{ borderColor: 'var(--primary)', color: 'var(--primary)' }}>
+                {copied ? '✓ Copiado' : '📋 Copiar prompt para la IA'}
+              </button>
+            </div>
+            <textarea value={importText} onChange={e => setImportText(e.target.value)} rows={7}
+              placeholder={'5 20 38 52 70\n12 19 41 48 66\n3 27 * 55 61\n9 16 33 47 74\n1 22 44 59 68\n\n(línea en blanco entre cartones)'}
+              className="w-full rounded-xl border-2 border-gray-200 p-3 font-mono text-sm focus:outline-none"
+              style={{ fontSize: 16 }} />
+            {importMsg && <p className="text-red-500 text-sm mt-2 font-medium">{importMsg}</p>}
+            <button onClick={readImport} disabled={!importText.trim()}
+              className="mt-3 w-full py-3 rounded-xl font-bold text-white text-sm transition-all
+                hover:opacity-90 active:scale-95 shadow-md disabled:opacity-40"
+              style={{ background: 'var(--primary)' }}>
+              Leer texto
+            </button>
+
+            {drafts.length > 0 && (
+              <div className="mt-4 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-bold text-gray-700">
+                    {drafts.length} cartón(es) leído(s) — revísalos
+                  </p>
+                  <button onClick={() => setDrafts([])} className="text-xs font-bold text-gray-400 underline">
+                    Descartar todo
+                  </button>
+                </div>
+                {drafts.map((d, i) => {
+                  const info = draftInfo(d, i)
+                  const state = !info.valid ? 'err' : (info.warns || info.dupExisting || info.dupDraft) ? 'warn' : 'ok'
+                  return (
+                    <div key={d.key} className="rounded-xl border-2 p-3"
+                      style={{ borderColor: state === 'err' ? '#fca5a5' : state === 'warn' ? '#fcd34d' : 'var(--primary-a35)' }}>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="bebas tracking-wider text-sm flex-1" style={{ color: 'var(--primary)' }}>
+                          Cartón leído #{i + 1}
+                        </span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded-full
+                          ${state === 'err' ? 'bg-red-100 text-red-600' : state === 'warn' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
+                          {state === 'err' ? '✗ corregir' : state === 'warn' ? '⚠ revisar' : '✓ listo'}
+                        </span>
+                      </div>
+                      <CardFormGrid form={d.form} status={info.st}
+                        onChange={(r, c, v) => updateDraft(d.key, r, c, v)} />
+                      <div className="mt-2 space-y-0.5 text-xs">
+                        {info.errors.map(e => <p key={e} className="text-red-500 font-medium">✗ {e}</p>)}
+                        {d.note && <p className="text-red-500 font-medium">✗ {d.note}</p>}
+                        {info.warns > 0 && (
+                          <p className="text-amber-600">⚠ {info.warns} número(s) fuera del rango de su columna
+                            (B 1-15, I 16-30, N 31-45, G 46-60, O 61-75): puede ser una lectura equivocada.</p>
+                        )}
+                        {info.dupExisting && <p className="text-amber-600">⚠ Ya tienes un cartón idéntico agregado.</p>}
+                        {info.dupDraft && <p className="text-amber-600">⚠ Es igual a otro cartón de esta lista.</p>}
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button onClick={() => removeDraft(d.key)}
+                          className="px-4 py-2 rounded-xl border-2 border-gray-200 text-gray-500 font-bold text-sm
+                            active:scale-95 transition-all">Quitar</button>
+                        <button onClick={() => confirmDrafts([d.key])} disabled={!info.valid}
+                          className="flex-1 py-2 rounded-xl text-white font-bold text-sm active:scale-95
+                            transition-all shadow-md disabled:opacity-40"
+                          style={{ background: 'var(--primary)' }}>
+                          ✓ Confirmar este cartón
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                <button onClick={() => confirmDrafts(drafts.map(d => d.key))} disabled={!draftValid.length}
+                  className="w-full py-3 rounded-xl font-bold text-white text-sm transition-all
+                    hover:opacity-90 active:scale-95 shadow-md disabled:opacity-40"
+                  style={{ background: 'var(--primary)' }}>
+                  Agregar todos los válidos ({draftValid.length})
+                </button>
+              </div>
+            )}
+          </Section>
+
+          {/* ── Manual card ── */}
+          <Section title="Agregar cartón a mano">
+            {cardError && <ErrorBox>{cardError}</ErrorBox>}
+            <FreeModeToggle on={freeMode} onToggle={() => setFreeMode(m => !m)} />
+            <CardFormGrid form={form} onChange={updateForm} onSubmit={addCard} freeMode={freeMode} />
+            <button onClick={addCard}
+              className="mt-4 w-full py-3 rounded-xl font-bold text-white text-sm
+                transition-all hover:opacity-90 active:scale-95 shadow-md"
+              style={{ background: 'var(--primary)' }}>
+              + Agregar cartón
+            </button>
+          </Section>
+
+          {/* ── Cards ── */}
+          {cards.length > 0 && (
+            <Section title={`Cartones (${cards.length})`}
+              right={<button onClick={clearAllCards} className="text-xs font-bold text-red-400 underline">Borrar todos</button>}>
+              <p className="text-xs text-gray-400 mb-3">Toca un cartón para corregir sus números.</p>
+              <div className="flex flex-wrap gap-3">
+                {cards.map((card, i) => (
+                  <div key={card.id} className="relative">
+                    <button onClick={() => openEdit(card)}
+                      className="border-2 rounded-xl p-2 transition-shadow hover:shadow-md bg-white"
+                      style={{ borderColor: 'var(--primary-a35)' }}>
+                      <p className="text-center text-xs font-black mb-1 bebas tracking-wider"
+                        style={{ color: 'var(--primary)' }}>#{i + 1}</p>
+                      <div className="grid grid-cols-5 gap-px">
+                        {card.numbers.map((row, r) => row.map((n, c) => (
+                          <div key={`${r}${c}`} className="w-6 h-5 flex items-center justify-center rounded"
+                            style={{
+                              background: n === null ? 'var(--primary)' : '#f3f4f6',
+                              color: n === null ? '#fff' : '#374151',
+                              fontSize: '8px', fontWeight: 700,
+                            }}>
+                            {n === null ? '★' : n}
+                          </div>
+                        ))).flat()}
+                      </div>
+                    </button>
+                    <button onClick={() => setCards(prev => prev.filter(cc => cc.id !== card.id))}
+                      className="absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-red-500 text-white font-bold
+                        flex items-center justify-center leading-none shadow-md hover:bg-red-600
+                        transition-colors text-sm">×</button>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
+
+          {startError && <ErrorBox>{startError}</ErrorBox>}
+          <button onClick={startGame} disabled={cards.length === 0}
+            className="w-full py-4 rounded-2xl text-white shadow-lg transition-all hover:shadow-xl
+              hover:opacity-95 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed bebas tracking-widest"
+            style={{ background: 'var(--primary)', fontSize: '1.5rem' }}>
+            INICIAR PARTIDA →
+          </button>
+          {cards.length === 0 && (
+            <p className="text-center text-gray-400 text-xs -mt-2">Agrega al menos un cartón para comenzar</p>
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   //  GAME SCREEN
   // ══════════════════════════════════════════════════════════════════════════
 
+  const calledSet = new Set(called)
+  const marks = cards.map(c => cardMarked(c, calledSet))
+  const idxOf = id => cards.findIndex(c => c.id === id) + 1
+
   return (
     <div className="min-h-screen bg-gray-100">
 
-      {/* ── Victory toast ── */}
       {toast && (
         <div className={`fixed top-4 left-1/2 z-50 bebas tracking-wider text-white
           px-6 py-3 rounded-2xl shadow-2xl text-center pointer-events-none toast-enter
           whitespace-pre-line ${rainbow ? 'is-rainbow' : ''}`}
           style={{
-            maxWidth: '88vw', fontSize: 'clamp(1.1rem, 5vw, 1.6rem)',
-            lineHeight: 1.2,
+            maxWidth: '92vw', fontSize: 'clamp(1.1rem, 5vw, 1.6rem)', lineHeight: 1.2,
             background: rainbow ? undefined : 'var(--primary)',
             transform: 'translateX(-50%)',
           }}>
@@ -609,178 +789,125 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Add-card modal ── */}
-      {modalOpen && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.55)' }}
-          onClick={e => e.target === e.currentTarget && setModalOpen(false)}>
-          {/* Sheet slides up from bottom on mobile, centered on desktop */}
-          <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm p-5 sm:p-6">
-            {/* Drag handle (mobile) */}
-            <div className="w-10 h-1 bg-gray-300 rounded-full mx-auto mb-4 sm:hidden" />
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="font-bold text-gray-800">Agregar cartón</h2>
-              <button onClick={() => setModalOpen(false)}
-                className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500
-                  flex items-center justify-center font-bold text-lg leading-none transition-colors">
-                ×
-              </button>
-            </div>
-            {modalError && (
-              <div className="mb-3 px-3 py-2 rounded-lg bg-red-50 border border-red-200
-                text-red-600 text-sm font-medium">
-                {modalError}
-              </div>
-            )}
-            <CardFormGrid
-              form={modalForm}
-              onChange={(r,c,v) =>
-                setModalForm(f => f.map((row,ri) => row.map((vv,ci) => ri===r&&ci===c ? v : vv)))
-              }
-              onSubmit={addCardInGame}
-            />
-            {called.length > 0 && (
-              <p className="text-xs text-gray-400 mt-2">
-                {called.length} número(s) ya cantados se marcarán automáticamente.
-              </p>
-            )}
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setModalOpen(false)}
-                className="flex-1 py-3 rounded-xl border-2 border-gray-200 text-gray-500 font-bold
-                  text-sm hover:border-gray-300 active:scale-95 transition-all">
-                Cancelar
-              </button>
-              <button onClick={addCardInGame}
-                className="flex-1 py-3 rounded-xl text-white font-bold text-sm
-                  hover:opacity-90 active:scale-95 transition-all shadow-md"
-                style={{ background: 'var(--primary)' }}>
-                + Agregar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {cardModal}
 
-      {/* ── Header ── */}
       <header className={`text-white shadow-lg ${rainbow ? 'is-rainbow' : ''}`}
         style={{ background: rainbow ? undefined : 'var(--primary)' }}>
-
-        {/* Top row: title + action buttons */}
         <div className="px-3 sm:px-4 pt-3 pb-1.5 flex items-center gap-1.5 sm:gap-2">
-          <h1 className="bebas text-2xl sm:text-3xl text-white flex-1 select-none"
-            style={{ letterSpacing: '0.2em' }}>
+          <h1 className="bebas text-2xl sm:text-3xl text-white flex-1 select-none" style={{ letterSpacing: '0.2em' }}>
             BINGO
           </h1>
-
-          {/* "+ Cartón" hidden on mobile (uses FAB instead) */}
-          <button onClick={openModal}
-            className="hidden sm:flex px-3 py-1.5 rounded-lg text-xs font-bold
-              bg-white/20 hover:bg-white/30 transition-all active:scale-95 whitespace-nowrap">
-            + Cartón
-          </button>
-
-          <button onClick={undoLast} disabled={!called.length || gameOver}
+          <button onClick={openAdd}
+            className="hidden sm:flex px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20
+              hover:bg-white/30 transition-all active:scale-95 whitespace-nowrap">+ Cartón</button>
+          <button onClick={undoLast} disabled={!called.length}
             className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
               disabled:opacity-40 transition-all active:scale-95 whitespace-nowrap">
             ↩<span className="hidden sm:inline"> Deshacer</span>
           </button>
-
-          <button onClick={newGame}
+          <button onClick={() => { if (window.confirm('¿Terminar la partida y volver a la configuración? Se conservan los cartones.')) backToConfig() }}
             className="px-3 py-1.5 rounded-lg text-xs font-bold bg-white/20 hover:bg-white/30
               transition-all active:scale-95 whitespace-nowrap">
             ✕<span className="hidden sm:inline"> Nueva</span>
           </button>
         </div>
 
-        {/* Stage pills */}
+        {/* Prize pills */}
         <div className="px-3 sm:px-4 pb-3 flex items-center gap-1.5 flex-wrap">
-          {[1, 2, 3].map(s => {
-            const { emoji, name } = STAGES[s]
-            const isActive = s === stage && !gameOver
-            const isDone   = s < stage || gameOver
+          {prizes.map(p => {
+            const done = !!awards[p.id]
             return (
-              <div key={s}
-                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold
-                  transition-all duration-300 select-none
-                  ${isActive ? 'bg-white text-gray-800 shadow-md scale-105' :
-                    isDone   ? 'bg-white/30 text-white/90' : 'bg-white/10 text-white/40'}`}>
-                <span>{emoji}</span>
-                <span className="hidden sm:inline">{name}</span>
-                {isActive && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-green-400 pulse-dot ml-0.5 inline-block" />
-                )}
-                {isDone && <span className="ml-0.5 opacity-80">✓</span>}
+              <div key={p.id}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold select-none
+                  ${done ? 'bg-white/30 text-white/90' : 'bg-white text-gray-800 shadow-md'}`}>
+                <span>{PRIZE_EMOJI[p.type]}</span>
+                <span>{p.name}</span>
+                {done ? <span className="opacity-80">✓</span>
+                      : <span className="w-1.5 h-1.5 rounded-full bg-green-400 pulse-dot inline-block" />}
               </div>
             )
           })}
           {gameOver && (
-            <span className="px-2.5 py-1 rounded-full text-xs font-bold
-              bg-yellow-400 text-yellow-900 ml-1">
-              🎊 ¡Fin!
-            </span>
+            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-400 text-yellow-900 ml-1">🎊 ¡Fin!</span>
           )}
         </div>
       </header>
 
-      {/* ── Floating action button — "+ Cartón" on mobile only ── */}
       {!gameOver && (
-        <button onClick={openModal}
-          className="fixed bottom-5 right-4 z-30 sm:hidden w-14 h-14 rounded-full
-            text-white text-3xl font-bold flex items-center justify-center
-            shadow-2xl active:scale-90 transition-transform"
-          style={{ background: 'var(--primary)' }}
-          aria-label="Agregar cartón">
-          +
-        </button>
+        <button onClick={openAdd}
+          className="fixed bottom-5 right-4 z-30 sm:hidden w-14 h-14 rounded-full text-white text-3xl
+            font-bold flex items-center justify-center shadow-2xl active:scale-90 transition-transform"
+          style={{ background: 'var(--primary)' }} aria-label="Agregar cartón">+</button>
       )}
 
       <div className="max-w-5xl mx-auto p-3 sm:p-4 space-y-3 sm:space-y-4">
 
-        {/* ── Number input ── */}
+        {/* Number input */}
         <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
           <div className="flex gap-2 sm:gap-3">
-            <input
-              ref={inputRef} type="number" min="1" max="75"
-              inputMode="numeric"
-              value={numInput}
-              onChange={e => setNumInput(e.target.value)}
+            <input ref={inputRef} type="number" min="1" max="75" inputMode="numeric"
+              value={numInput} onChange={e => setNumInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && callNum()}
               disabled={gameOver}
-              className="flex-1 h-14 sm:h-16 rounded-xl border-2 text-center font-black
-                focus:outline-none transition-colors bebas tracking-widest
-                disabled:bg-gray-50 disabled:text-gray-300"
-              style={{
-                borderColor: numInput ? 'var(--primary)' : '#e5e7eb',
-                fontSize: 'clamp(1.6rem, 8vw, 2.4rem)',
-              }}
-              placeholder="00"
-            />
+              className="flex-1 h-14 sm:h-16 rounded-xl border-2 text-center font-black focus:outline-none
+                transition-colors bebas tracking-widest disabled:bg-gray-50 disabled:text-gray-300"
+              style={{ borderColor: numInput ? 'var(--primary)' : '#e5e7eb', fontSize: 'clamp(1.6rem, 8vw, 2.4rem)' }}
+              placeholder="00" />
             <button onClick={callNum} disabled={gameOver}
               className="px-5 sm:px-8 h-14 sm:h-16 rounded-xl font-black text-white transition-all
                 hover:opacity-90 active:scale-95 whitespace-nowrap shadow-md bebas tracking-widest
                 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
-              style={{
-                background: 'var(--primary)',
-                fontSize: 'clamp(1rem, 4vw, 1.4rem)',
-              }}>
+              style={{ background: 'var(--primary)', fontSize: 'clamp(1rem, 4vw, 1.4rem)' }}>
               CANTAR
             </button>
           </div>
           {gameError && <p className="text-red-500 text-sm mt-2 font-medium">{gameError}</p>}
           {gameOver && (
             <p className="text-center text-gray-400 text-sm mt-2">
-              Partida terminada — toca <strong>✕</strong> para jugar otra vez.
+              Todos los premios entregados — toca <strong>✕</strong> para jugar otra vez (↩ para deshacer el último número).
             </p>
           )}
         </div>
 
-        {/* ── Called balls ── */}
+        {/* Prize status */}
+        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+          <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">Premios</p>
+          <div className="space-y-1.5">
+            {prizes.map(p => {
+              const a = awards[p.id]
+              let near = null
+              if (!a) {
+                const m = marks.map((mk, i) => ({ i, m: missing(p, mk) })).filter(x => x.m > 0)
+                if (m.length) {
+                  const best = Math.min(...m.map(x => x.m))
+                  near = `Más cerca: cartón${m.filter(x => x.m === best).length > 1 ? 'es' : ''} ${
+                    m.filter(x => x.m === best).map(x => '#' + (x.i + 1)).join(', ')} (${best === 1 ? 'falta 1' : `faltan ${best}`})`
+                }
+              }
+              return (
+                <div key={p.id} className="flex items-start gap-2 text-sm">
+                  <span className="flex-shrink-0">{PRIZE_EMOJI[p.type]}</span>
+                  <span className="font-bold text-gray-700 flex-shrink-0">{p.name}:</span>
+                  {a ? (
+                    <span className="text-green-600 font-semibold">
+                      ✓ {a.cardIds.length > 1 ? 'Cartones' : 'Cartón'} {a.cardIds.map(id => '#' + idxOf(id)).filter(s => s !== '#0').join(', ')}
+                      {a.last !== null && <span className="text-gray-400 font-normal"> · con el {a.last}</span>}
+                    </span>
+                  ) : (
+                    <span className="text-gray-400">pendiente{near ? ` · ${near}` : ''}</span>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Called balls */}
         <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
           <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">
             Cantados — {called.length} / 75
           </p>
-          <div ref={ballsRef}
-            className="flex gap-2 overflow-x-auto pb-1"
+          <div ref={ballsRef} className="flex gap-2 overflow-x-auto pb-1"
             style={{ scrollbarWidth: 'thin', scrollbarColor: 'var(--primary-a35) transparent' }}>
             {called.length === 0
               ? <span className="text-gray-300 text-sm py-2 px-1 italic">Aún sin números…</span>
@@ -789,108 +916,105 @@ export default function App() {
                   return (
                     <div key={i}
                       className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center
-                        font-black bebas transition-all duration-200
-                        ${isLast && rainbow ? 'is-rainbow' : ''}`}
+                        font-black bebas transition-all duration-200 ${isLast && rainbow ? 'is-rainbow' : ''}`}
                       style={{
                         background: isLast && !rainbow ? 'var(--primary)' : isLast ? undefined : '#f3f4f6',
-                        color:      isLast ? '#fff' : '#4b5563',
-                        transform:  isLast ? 'scale(1.22)' : 'scale(1)',
-                        boxShadow:  isLast && !rainbow ? '0 3px 12px var(--primary-a35)' : 'none',
-                        fontSize:   '1rem',
+                        color: isLast ? '#fff' : '#4b5563',
+                        transform: isLast ? 'scale(1.22)' : 'scale(1)',
+                        boxShadow: isLast && !rainbow ? '0 3px 12px var(--primary-a35)' : 'none',
+                        fontSize: '1rem',
                       }}>
                       {n}
                     </div>
                   )
-                })
-            }
+                })}
           </div>
         </div>
 
-        {/* ── Game cards grid ──
-              1 column on mobile, 2 on sm, 3 on xl                          */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4
-          pb-20 sm:pb-0">  {/* bottom padding clears the FAB on mobile */}
-          {gameCards.map(card => {
-            const hasBadge = card.badges.length > 0
+        {/* Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 pb-20 sm:pb-0">
+          {cards.map((card, ci) => {
+            const mk = marks[ci]
+            const wonPrizes = prizes.filter(p => awards[p.id]?.cardIds.includes(card.id))
+            const hasBadge = wonPrizes.length > 0
+            const near = prizes
+              .filter(p => !awards[p.id])
+              .map(p => ({ p, m: missing(p, mk) }))
+              .filter(x => x.m > 0 && x.m <= 2)
             return (
-              <div key={card.id}
-                className="bg-white rounded-2xl overflow-hidden transition-all duration-300"
+              <div key={card.id} className="bg-white rounded-2xl overflow-hidden transition-all duration-300"
                 style={{
                   boxShadow: hasBadge
                     ? '0 0 0 3px var(--primary), 0 6px 24px var(--primary-a35)'
                     : '0 1px 4px rgba(0,0,0,0.08)',
                 }}>
-
-                {/* Card header */}
                 <div className={`px-3 py-2.5 flex items-center gap-2 transition-colors duration-300
                   ${hasBadge && rainbow ? 'is-rainbow' : ''}`}
                   style={{
-                    background:   hasBadge && !rainbow ? 'var(--primary)' :
-                                  hasBadge &&  rainbow ? undefined         : '#f9fafb',
+                    background: hasBadge && !rainbow ? 'var(--primary)' : hasBadge && rainbow ? undefined : '#f9fafb',
                     borderBottom: '1px solid #e5e7eb',
                   }}>
-                  <span className={`bebas tracking-wider text-sm flex-1
-                    ${hasBadge ? 'text-white' : 'text-gray-700'}`}>
-                    Cartón #{card.idx}
+                  <span className={`bebas tracking-wider text-sm flex-1 ${hasBadge ? 'text-white' : 'text-gray-700'}`}>
+                    Cartón #{ci + 1}
                   </span>
-                  <div className="flex items-center gap-0.5">
-                    {[1, 2, 3].map(s => {
-                      const { badge, emoji, label } = STAGES[s]
-                      if (!card.badges.includes(badge)) return null
-                      return <span key={s} className="text-base leading-none" title={label}>{emoji}</span>
-                    })}
+                  <div className="flex items-center gap-1 flex-wrap justify-end">
+                    {wonPrizes.map(p => (
+                      <span key={p.id} className="text-xs font-bold px-2 py-0.5 rounded-full bg-white/25 text-white"
+                        title={p.name}>{PRIZE_EMOJI[p.type]} {p.name}</span>
+                    ))}
                     {!hasBadge && (
-                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">
-                        Jugando
-                      </span>
+                      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-gray-100 text-gray-400">Jugando</span>
+                    )}
+                    {!gameOver && (
+                      <button onClick={() => openEdit(card)} title="Corregir números"
+                        className={`w-6 h-6 rounded-full text-xs flex items-center justify-center
+                          ${hasBadge ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>✎</button>
                     )}
                   </div>
                 </div>
 
-                {/* BINGO column labels */}
                 <div className="grid grid-cols-5 bg-gray-50 border-b border-gray-100">
                   {COLS.map(l => (
                     <div key={l} className="text-center py-1 text-xs font-black bebas tracking-wider"
-                      style={{ color: 'var(--primary)' }}>
-                      {l}
-                    </div>
+                      style={{ color: 'var(--primary)' }}>{l}</div>
                   ))}
                 </div>
 
-                {/* Cell grid */}
                 <div className="grid grid-cols-5 gap-1 p-2 sm:gap-1.5 sm:p-2.5">
                   {card.numbers.map((row, r) => row.map((n, c) => {
-                    const free        = isFree(r, c)
-                    const marked      = card.marked[r][c]
-                    const cellRainbow = (free || marked) && rainbow
+                    const free = n === null
+                    const marked = mk[r][c]
+                    const cellRainbow = marked && rainbow
                     return (
-                      <button key={`${r}${c}`}
-                        onClick={() => toggleCell(card.id, r, c)}
-                        disabled={free}
-                        className={`bingo-cell aspect-square rounded-lg flex items-center
-                          justify-center font-bold
-                          ${marked && !free ? 'marked' : ''}
-                          ${cellRainbow ? 'is-rainbow' : ''}`}
+                      <button key={`${r}${c}`} onClick={() => toggleCell(card.id, r, c)} disabled={free}
+                        className={`bingo-cell aspect-square rounded-lg flex items-center justify-center font-bold
+                          ${marked && !free ? 'marked' : ''} ${cellRainbow ? 'is-rainbow' : ''}`}
                         style={{
-                          background: (free || marked) && !rainbow ? 'var(--primary)' :
-                                      (free || marked) &&  rainbow ? undefined         : '#f3f4f6',
-                          color:      free || marked ? '#fff' : '#374151',
-                          cursor:     free ? 'default' : 'pointer',
-                          fontSize:   'clamp(0.6rem, 2.5vw, 0.8rem)',
-                          boxShadow:  marked && !free && !rainbow
-                            ? '0 2px 8px var(--primary-a35)' : 'none',
+                          background: marked && !rainbow ? 'var(--primary)' : marked && rainbow ? undefined : '#f3f4f6',
+                          color: marked ? '#fff' : '#374151',
+                          cursor: free ? 'default' : 'pointer',
+                          fontSize: 'clamp(0.6rem, 2.5vw, 0.8rem)',
+                          boxShadow: marked && !free && !rainbow ? '0 2px 8px var(--primary-a35)' : 'none',
                         }}>
                         {free ? '★' : n}
                       </button>
                     )
-                  }))}
+                  })).flat()}
                 </div>
 
+                {near.length > 0 && (
+                  <div className="px-3 pb-2.5 -mt-0.5 flex flex-wrap gap-1">
+                    {near.map(({ p, m }) => (
+                      <span key={p.id} className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                        {p.name}: {m === 1 ? 'falta 1' : `faltan ${m}`}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )
           })}
         </div>
-
       </div>
     </div>
   )
