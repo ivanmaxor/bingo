@@ -106,9 +106,43 @@ const sanitizeCell = raw => {
   return v.replace(/\D/g, '').slice(0, 2)
 }
 
+// Number catalog for one column (B 1-15, I 16-30, …): tap the right number to fill a cell.
+function NumberPicker({ col, used, onPick, onFree, onClose }) {
+  const nums = Array.from({ length: 15 }, (_, i) => col * 15 + 1 + i)
+  return (
+    <div className="mt-3 rounded-xl border-2 p-2" style={{ borderColor: 'var(--primary-a35)', background: 'var(--primary-a12)' }}>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-bold" style={{ color: 'var(--primary)' }}>
+          Columna {COLS[col]} · toca el número correcto
+        </p>
+        <div className="flex gap-1">
+          <button type="button" onClick={onFree}
+            className="px-2 py-1 rounded-lg bg-white text-xs font-bold text-gray-600 border border-gray-200">★ libre</button>
+          <button type="button" onClick={onClose}
+            className="px-2 py-1 rounded-lg bg-white text-xs font-bold text-gray-600 border border-gray-200">✕</button>
+        </div>
+      </div>
+      <div className="grid grid-cols-5 gap-1">
+        {nums.map(n => (
+          <button key={n} type="button" disabled={used.has(n)} onClick={() => onPick(n)}
+            className="h-10 rounded-lg bg-white font-bold text-sm border border-gray-200 active:scale-90
+              transition-all disabled:opacity-25 disabled:line-through">
+            {n}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // 5×5 input grid. A "*" cell is a free space. In freeMode, tapping a cell toggles it free.
-function CardFormGrid({ form, onChange, onSubmit, freeMode = false, status }) {
+// Tapping a cell opens the column's number catalog (kbd=false hides the phone keyboard).
+function CardFormGrid({ form, onChange, onSubmit, freeMode = false, status, kbd = true }) {
   const st = status || analyzeForm(form).st
+  const [active, setActive] = useState(null)
+  const used = new Set(form.flat().filter(v => /^\d+$/.test(v)).map(Number))
+  if (active && /^\d+$/.test(form[active.r][active.c])) used.delete(Number(form[active.r][active.c]))
+  const pick = v => { onChange(active.r, active.c, v); setActive(null) }
   return (
     <div className="overflow-x-auto -mx-1 px-1">
       <div className="inline-block min-w-full">
@@ -142,20 +176,26 @@ function CardFormGrid({ form, onChange, onSubmit, freeMode = false, status }) {
               )
             }
             const s = st[r][c]
+            const isActive = active && active.r === r && active.c === c
             return (
-              <input key={`${r}${c}`} type="text" inputMode="numeric" maxLength={2}
+              <input key={`${r}${c}`} type="text" inputMode={kbd ? 'numeric' : 'none'} maxLength={2}
                 value={v}
+                onFocus={() => setActive({ r, c })}
                 onChange={e => onChange(r, c, sanitizeCell(e.target.value))}
                 onKeyDown={e => e.key === 'Enter' && onSubmit?.()}
                 className={`${base} border-2 text-center font-bold text-base focus:outline-none transition-colors`}
                 style={{
-                  borderColor: v ? CELL_BORDER[s] : '#e5e7eb',
+                  borderColor: isActive ? '#111827' : v ? CELL_BORDER[s] : '#e5e7eb',
                   background: s === 'err' && v ? '#fef2f2' : s === 'warn' ? '#fffbeb' : undefined,
                 }}
                 placeholder="—" />
             )
           }).flat()}
         </div>
+        {active && !freeMode && form[active.r][active.c] !== FREE && (
+          <NumberPicker col={active.c} used={used}
+            onPick={n => pick(String(n))} onFree={() => pick(FREE)} onClose={() => setActive(null)} />
+        )}
       </div>
     </div>
   )
@@ -230,7 +270,7 @@ function CardModal({ title, form, setForm, error, onSave, onClose, onDelete, not
         </div>
         {error && <ErrorBox>{error}</ErrorBox>}
         <FreeModeToggle on={freeMode} onToggle={() => setFreeMode(m => !m)} />
-        <CardFormGrid form={form} onChange={update} onSubmit={onSave} freeMode={freeMode} />
+        <CardFormGrid form={form} onChange={update} onSubmit={onSave} freeMode={freeMode} kbd={false} />
         {note && <p className="text-xs text-gray-400 mt-2">{note}</p>}
         <div className="flex gap-2 mt-4">
           {onDelete && (
@@ -247,6 +287,34 @@ function CardModal({ title, form, setForm, error, onSave, onClose, onDelete, not
             style={{ background: 'var(--primary)' }}>{saveLabel}</button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// Called-number board ordered by letter: tap a number to call it.
+function CallBoard({ called, onCall, disabled }) {
+  const set = new Set(called)
+  const last = called[called.length - 1]
+  return (
+    <div className="grid grid-cols-5 gap-1.5">
+      {COLS.map((l, ci) => (
+        <div key={l} className="flex flex-col gap-1">
+          <div className="text-center text-sm font-black bebas tracking-wider" style={{ color: 'var(--primary)' }}>{l}</div>
+          {Array.from({ length: 15 }, (_, i) => ci * 15 + 1 + i).map(n => {
+            const on = set.has(n)
+            return (
+              <button key={n} type="button" onClick={() => onCall(n)} disabled={disabled || on}
+                className="h-8 rounded-md text-xs font-bold transition-all active:scale-90 disabled:cursor-default"
+                style={{
+                  background: n === last ? 'var(--primary)' : on ? 'var(--primary-a35)' : '#f3f4f6',
+                  color: n === last ? '#fff' : on ? 'var(--primary-dark)' : '#374151',
+                }}>
+                {n}
+              </button>
+            )
+          })}
+        </div>
+      ))}
     </div>
   )
 }
@@ -276,6 +344,9 @@ export default function App() {
   const [numInput,  setNumInput]  = useState('')
   const [gameError, setGameError] = useState('')
   const [toast,     setToast]     = useState(null)
+  const [showBoard, setShowBoard] = useState(S.showBoard !== false)
+  const [onlyNear,  setOnlyNear]  = useState(false)
+  const [nearN,     setNearN]     = useState(2)
 
   // Card modal: { mode: 'add' | 'edit', id? }
   const [modal,      setModal]      = useState(null)
@@ -290,9 +361,9 @@ export default function App() {
   useEffect(() => { loadConfetti() }, [])
   useEffect(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ color, rainbow, prizes, cards, started, called, awards }))
+      localStorage.setItem(STORE_KEY, JSON.stringify({ color, rainbow, prizes, cards, started, called, awards, showBoard }))
     } catch { /* storage full or blocked */ }
-  }, [color, rainbow, prizes, cards, started, called, awards])
+  }, [color, rainbow, prizes, cards, started, called, awards, showBoard])
 
   const gameOver = started && prizes.length > 0 && prizes.every(p => awards[p.id])
 
@@ -417,18 +488,17 @@ export default function App() {
 
   // ── Game actions ──────────────────────────────────────────────────────────
 
-  const callNum = () => {
+  const callValue = n => {
     if (gameOver) return
-    const n = parseInt(numInput, 10)
     if (isNaN(n) || n < 1 || n > 75) { setGameError('Número entre 1 y 75'); return }
-    if (called.includes(n))           { setGameError('Ya fue cantado'); return }
+    if (called.includes(n))           { setGameError(`El ${n} ya fue cantado`); return }
     setGameError(''); setNumInput('')
     commit(cards, [...called, n], awards, true)
     setTimeout(() => {
       if (ballsRef.current) ballsRef.current.scrollLeft = ballsRef.current.scrollWidth
-      inputRef.current?.focus()
     }, 40)
   }
+  const callNum = () => { callValue(parseInt(numInput, 10)); inputRef.current?.focus() }
 
   const undoLast = () => {
     if (!called.length) return
@@ -437,6 +507,16 @@ export default function App() {
     const kept = {}
     for (const [k, v] of Object.entries(awards)) if (v.step <= nc.length) kept[k] = v
     commit(cards, nc, kept)
+  }
+
+  // Someone else already won this prize: it stops counting for my cards (undoable).
+  const markTaken = p => {
+    const nextAwards = { ...awards, [p.id]: { step: -1, cardIds: [], last: null, external: true } }
+    setAwards(nextAwards)
+  }
+  const unmarkTaken = p => {
+    const rest = { ...awards }; delete rest[p.id]
+    commit(cards, called, rest)
   }
 
   const toggleCell = (cardId, r, c) => {
@@ -665,7 +745,7 @@ export default function App() {
                           {state === 'err' ? '✗ corregir' : state === 'warn' ? '⚠ revisar' : '✓ listo'}
                         </span>
                       </div>
-                      <CardFormGrid form={d.form} status={info.st}
+                      <CardFormGrid form={d.form} status={info.st} kbd={false}
                         onChange={(r, c, v) => updateDraft(d.key, r, c, v)} />
                       <div className="mt-2 space-y-0.5 text-xs">
                         {info.errors.map(e => <p key={e} className="text-red-500 font-medium">✗ {e}</p>)}
@@ -772,6 +852,13 @@ export default function App() {
   const calledSet = new Set(called)
   const marks = cards.map(c => cardMarked(c, calledSet))
   const idxOf = id => cards.findIndex(c => c.id === id) + 1
+  const closest = i => {
+    const ms = prizes.filter(p => !awards[p.id]).map(p => missing(p, marks[i])).filter(m => m > 0)
+    return ms.length ? Math.min(...ms) : Infinity
+  }
+  const shownIdx = cards.map((_, i) => i)
+    .filter(i => !onlyNear || closest(i) <= nearN)
+    .sort((a, b) => (onlyNear ? closest(a) - closest(b) || a - b : 0))
 
   return (
     <div className="min-h-screen bg-gray-100">
@@ -869,6 +956,20 @@ export default function App() {
           )}
         </div>
 
+        {/* Letter board */}
+        <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
+          <button onClick={() => setShowBoard(v => !v)}
+            className="w-full flex items-center justify-between text-xs font-bold text-gray-400 tracking-wider uppercase">
+            <span>Tablero B-I-N-G-O · toca para cantar</span>
+            <span>{showBoard ? '▲ ocultar' : '▼ mostrar'}</span>
+          </button>
+          {showBoard && (
+            <div className="mt-3">
+              <CallBoard called={called} onCall={callValue} disabled={gameOver} />
+            </div>
+          )}
+        </div>
+
         {/* Prize status */}
         <div className="bg-white rounded-2xl p-3 sm:p-4 shadow-sm">
           <p className="text-xs font-bold text-gray-400 mb-2 tracking-wider uppercase">Premios</p>
@@ -888,13 +989,27 @@ export default function App() {
                 <div key={p.id} className="flex items-start gap-2 text-sm">
                   <span className="flex-shrink-0">{PRIZE_EMOJI[p.type]}</span>
                   <span className="font-bold text-gray-700 flex-shrink-0">{p.name}:</span>
-                  {a ? (
-                    <span className="text-green-600 font-semibold">
-                      ✓ {a.cardIds.length > 1 ? 'Cartones' : 'Cartón'} {a.cardIds.map(id => '#' + idxOf(id)).filter(s => s !== '#0').join(', ')}
-                      {a.last !== null && <span className="text-gray-400 font-normal"> · con el {a.last}</span>}
-                    </span>
-                  ) : (
-                    <span className="text-gray-400">pendiente{near ? ` · ${near}` : ''}</span>
+                  <span className="flex-1 min-w-0">
+                    {a?.external ? (
+                      <span className="text-gray-500 font-semibold">✓ Ya lo ganó otra persona <span className="font-normal text-gray-400">(no cuenta)</span></span>
+                    ) : a ? (
+                      <span className="text-green-600 font-semibold">
+                        ✓ {a.cardIds.length > 1 ? 'Cartones' : 'Cartón'} {a.cardIds.map(id => '#' + idxOf(id)).filter(s => s !== '#0').join(', ')}
+                        {a.last !== null && <span className="text-gray-400 font-normal"> · con el {a.last}</span>}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400">pendiente{near ? ` · ${near}` : ''}</span>
+                    )}
+                  </span>
+                  {a?.external && (
+                    <button onClick={() => unmarkTaken(p)}
+                      className="flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-lg border border-gray-300 text-gray-500">Quitar marca</button>
+                  )}
+                  {!a && !gameOver && (
+                    <button onClick={() => markTaken(p)}
+                      className="flex-shrink-0 text-xs font-bold px-2 py-0.5 rounded-lg border border-amber-300 text-amber-700 bg-amber-50">
+                      Ya lo ganó otro
+                    </button>
                   )}
                 </div>
               )
@@ -931,16 +1046,38 @@ export default function App() {
           </div>
         </div>
 
+        {/* Card filter */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setOnlyNear(v => !v)}
+            className={`px-3 py-2 rounded-xl border-2 text-sm font-bold transition-all active:scale-95
+              ${onlyNear ? 'text-white border-transparent' : 'border-gray-200 text-gray-500 bg-white'}`}
+            style={onlyNear ? { background: 'var(--primary)' } : undefined}>
+            🎯 Solo cercanos{onlyNear ? ` (${shownIdx.length})` : ''}
+          </button>
+          <div className="flex items-center gap-1 text-xs font-bold text-gray-400">
+            faltan ≤
+            {[1, 2, 3].map(n => (
+              <button key={n} onClick={() => setNearN(n)}
+                className={`w-7 h-7 rounded-lg border-2 ${nearN === n ? 'text-white border-transparent' : 'border-gray-200 text-gray-500 bg-white'}`}
+                style={nearN === n ? { background: 'var(--primary)' } : undefined}>{n}</button>
+            ))}
+          </div>
+          {onlyNear && shownIdx.length === 0 && (
+            <span className="text-xs text-gray-400">Ningún cartón está tan cerca todavía.</span>
+          )}
+        </div>
+
         {/* Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 pb-20 sm:pb-0">
-          {cards.map((card, ci) => {
+          {shownIdx.map(ci => {
+            const card = cards[ci]
             const mk = marks[ci]
             const wonPrizes = prizes.filter(p => awards[p.id]?.cardIds.includes(card.id))
             const hasBadge = wonPrizes.length > 0
             const near = prizes
               .filter(p => !awards[p.id])
               .map(p => ({ p, m: missing(p, mk) }))
-              .filter(x => x.m > 0 && x.m <= 2)
+              .filter(x => x.m > 0 && x.m <= nearN)
             return (
               <div key={card.id} className="bg-white rounded-2xl overflow-hidden transition-all duration-300"
                 style={{
